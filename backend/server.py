@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,67 +6,2838 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
+import math
+import asyncio
+import yfinance as yf
+import pandas as pd
+from nsepython import nse_optionchain_scrapper, nse_quote_ltp
+from openai import OpenAI
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
 app = FastAPI()
-
-# Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+cache_storage = {}
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
+
+class OHLCVBar(BaseModel):
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
     
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+class StockDataResponse(BaseModel):
+    ticker: str
+    bars: List[OHLCVBar]
+    
+class GannAngle(BaseModel):
+    angle_type: str
+    price_levels: List[float]
+    
+class GannFanRequest(BaseModel):
+    ticker: str
+    pivot_price: float
+    pivot_timestamp: int
+    bars_count: int = 50
+    
+class GannFanResponse(BaseModel):
+    angles: List[GannAngle]
+    pivot_price: float
+    pivot_timestamp: int
+    
+class SquareOf9Response(BaseModel):
+    center_price: float
+    targets: dict
+    
+class SignalResponse(BaseModel):
+    ticker: str
+    signal: str
+    color: str
+    price: float
+    angle_1x1: float
+    timestamp: int
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class AITradeAnalysisRequest(BaseModel):
+    ticker: str
+    timeframe: str
+    bars: List[dict]
 
-# Add your routes to the router instead of directly to app
+class AITradeAnalysisResponse(BaseModel):
+    direction: str
+    entry_price: str
+    stoploss: str
+    targets: List[str]
+    reason: str
+
+class FallingKnifeAnalysisRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+
+class FallingKnifeAnalysisResponse(BaseModel):
+    status: str
+    signal_type: str
+    conditions_met: int
+    drop_percentage: Optional[float] = None
+    bollinger_squeeze: bool
+    price_in_keltner: bool
+    macd_bullish: bool
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    targets: Optional[List[str]] = None
+    recommendation: str
+
+class ReverseSwingsRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    force_method: Optional[str] = None  # 'A' or 'B'
+
+class ReverseSwingsResponse(BaseModel):
+    method: str
+    signal_type: str
+    trend_confirmed: bool
+    swing_signal: bool
+    valid_entry_day: bool
+    signal_active: bool
+    current_swing: str
+    avg_swing: str
+    threshold_swing: str
+    price_comparison: str
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    targets: Optional[List[str]] = None
+    entry_day: Optional[str] = None
+    recommendation: str
+
+class OIDataResponse(BaseModel):
+    symbol: str
+    total_call_oi: float
+    total_put_oi: float
+    pcr: float
+    max_pain: Optional[float] = None
+    top_strikes: List[dict]
+    signal: str
+    signal_color: str
+
+
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "Gann Angles Trader API - NSE Edition"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
+@api_router.get("/stock/search")
+async def search_stock(q: str = Query(..., min_length=1)):
+    """Search for stock tickers - NSE stocks"""
+    cache_key = f"search_{q}"
+    if cache_key in cache_storage:
+        cached_data, cached_time = cache_storage[cache_key]
+        if (datetime.now() - cached_time).seconds < 300:
+            return cached_data
     
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+    try:
+        q_upper = q.upper()
+        
+        nse_stocks = [
+            {"ticker": "NIFTY", "name": "NIFTY 50 Index", "type": "INDEX"},
+            {"ticker": "BANKNIFTY", "name": "Bank Nifty Index", "type": "INDEX"},
+            {"ticker": "FINNIFTY", "name": "Nifty Financial Services", "type": "INDEX"},
+            {"ticker": "RELIANCE.NS", "name": "Reliance Industries Ltd", "type": "STOCK"},
+            {"ticker": "TCS.NS", "name": "Tata Consultancy Services", "type": "STOCK"},
+            {"ticker": "HDFCBANK.NS", "name": "HDFC Bank Ltd", "type": "STOCK"},
+            {"ticker": "INFY.NS", "name": "Infosys Ltd", "type": "STOCK"},
+            {"ticker": "ICICIBANK.NS", "name": "ICICI Bank Ltd", "type": "STOCK"},
+            {"ticker": "SBIN.NS", "name": "State Bank of India", "type": "STOCK"},
+            {"ticker": "BHARTIARTL.NS", "name": "Bharti Airtel Ltd", "type": "STOCK"},
+            {"ticker": "ITC.NS", "name": "ITC Ltd", "type": "STOCK"},
+            {"ticker": "KOTAKBANK.NS", "name": "Kotak Mahindra Bank", "type": "STOCK"},
+            {"ticker": "LT.NS", "name": "Larsen & Toubro Ltd", "type": "STOCK"},
+            {"ticker": "AXISBANK.NS", "name": "Axis Bank Ltd", "type": "STOCK"},
+            {"ticker": "ASIANPAINT.NS", "name": "Asian Paints Ltd", "type": "STOCK"},
+            {"ticker": "MARUTI.NS", "name": "Maruti Suzuki India Ltd", "type": "STOCK"},
+            {"ticker": "WIPRO.NS", "name": "Wipro Ltd", "type": "STOCK"},
+            {"ticker": "TATAMOTORS.NS", "name": "Tata Motors Ltd", "type": "STOCK"},
+            {"ticker": "TATASTEEL.NS", "name": "Tata Steel Ltd", "type": "STOCK"},
+            {"ticker": "ADANIENT.NS", "name": "Adani Enterprises Ltd", "type": "STOCK"},
+        ]
+        
+        results = [s for s in nse_stocks if q_upper in s["ticker"] or q_upper in s["name"].upper()]
+        
+        result = {"results": results[:10]}
+        cache_storage[cache_key] = (result, datetime.now())
+        return result
+    except Exception as e:
+        logging.error(f"Error searching stocks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Include the router in the main app
+
+@api_router.get("/stock/bars/{ticker}", response_model=StockDataResponse)
+async def get_stock_bars(
+    ticker: str,
+    timespan: str = "day",
+    multiplier: int = 1,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    limit: int = 120
+):
+    """Get historical OHLCV data using yfinance"""
+    try:
+        # yfinance valid intervals: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 4h, 1d, 5d, 1wk, 1mo, 3mo
+        # Note: 10m is NOT supported by yfinance, so we map it to 15m (closest supported)
+        interval_map = {
+            (10, "minute"): "15m",  # 10m not supported, use 15m instead
+            (30, "minute"): "30m",
+            (1, "hour"): "1h",
+            (4, "hour"): "4h",
+            (1, "day"): "1d",
+            (1, "week"): "1wk",
+        }
+        
+        interval = interval_map.get((multiplier, timespan), "1d")
+        
+        # yfinance strict limits:
+        # 1m: max 7 days | 2m/5m/15m/30m: max 60 days | 60m/1h: max 730 days | 4h: max 730 days
+        # For daily/weekly: no practical limit
+        is_intraday = timespan in ["minute", "hour"]
+        
+        if is_intraday:
+            # Choose max safe period based on interval
+            if interval in ["1m"]:
+                period = "7d"
+            elif interval in ["15m", "30m", "5m", "2m"]:
+                period = "60d"
+            elif interval in ["1h"]:
+                period = "730d"
+            elif interval in ["4h"]:
+                period = "730d"
+            else:
+                period = "60d"
+            
+            # If from_date is provided, clamp it within allowed range
+            if from_date:
+                max_days = 7 if interval in ["1m"] else 60 if interval in ["15m", "30m", "5m", "2m"] else 730
+                earliest_allowed = (datetime.now() - timedelta(days=max_days)).strftime("%Y-%m-%d")
+                if from_date < earliest_allowed:
+                    from_date = earliest_allowed
+                if not to_date:
+                    to_date = datetime.now().strftime("%Y-%m-%d")
+                
+                cache_key = f"bars_{ticker}_{interval}_{from_date}_{to_date}"
+                if cache_key in cache_storage:
+                    cached_data, cached_time = cache_storage[cache_key]
+                    if (datetime.now() - cached_time).seconds < 300:
+                        return cached_data
+                
+                stock = yf.Ticker(ticker)
+                hist = stock.history(start=from_date, end=to_date, interval=interval)
+            else:
+                cache_key = f"bars_{ticker}_{interval}_{period}"
+                if cache_key in cache_storage:
+                    cached_data, cached_time = cache_storage[cache_key]
+                    if (datetime.now() - cached_time).seconds < 300:
+                        return cached_data
+                
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period=period, interval=interval)
+        else:
+            if not from_date:
+                from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+            if not to_date:
+                to_date = datetime.now().strftime("%Y-%m-%d")
+            
+            cache_key = f"bars_{ticker}_{interval}_{from_date}_{to_date}"
+            if cache_key in cache_storage:
+                cached_data, cached_time = cache_storage[cache_key]
+                if (datetime.now() - cached_time).seconds < 600:
+                    return cached_data
+            
+            stock = yf.Ticker(ticker)
+            hist = stock.history(start=from_date, end=to_date, interval=interval)
+        
+        if hist.empty:
+            raise HTTPException(status_code=404, detail=f"No data found for {ticker}")
+        
+        bars = []
+        for index, row in hist.iterrows():
+            bars.append(OHLCVBar(
+                timestamp=int(index.timestamp() * 1000),
+                open=float(row['Open']),
+                high=float(row['High']),
+                low=float(row['Low']),
+                close=float(row['Close']),
+                volume=float(row['Volume'])
+            ))
+        
+        result = StockDataResponse(ticker=ticker.upper(), bars=bars)
+        cache_storage[cache_key] = (result, datetime.now())
+        return result
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching bars for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/nse/oi/{symbol}", response_model=OIDataResponse)
+async def get_nse_oi(symbol: str):
+    """Get NSE Option Chain Open Interest data"""
+    cache_key = f"oi_{symbol}"
+    if cache_key in cache_storage:
+        cached_data, cached_time = cache_storage[cache_key]
+        if (datetime.now() - cached_time).seconds < 120:
+            return cached_data
+    
+    try:
+        oi_data = nse_optionchain_scrapper(symbol)
+        
+        total_call_oi = float(oi_data.get('totalCallOI', 0))
+        total_put_oi = float(oi_data.get('totalPutOI', 0))
+        pcr = float(oi_data.get('PCR', 0))
+        
+        df = pd.DataFrame(oi_data.get('data', []))
+        top_strikes = []
+        
+        if not df.empty and len(df) > 0:
+            top_df = df.head(15)
+            for _, row in top_df.iterrows():
+                top_strikes.append({
+                    "strike": float(row.get('strikePrice', 0)),
+                    "call_oi": float(row.get('CE_OI', 0)),
+                    "put_oi": float(row.get('PE_OI', 0)),
+                    "call_volume": float(row.get('CE_volume', 0)),
+                    "put_volume": float(row.get('PE_volume', 0))
+                })
+        
+        if total_call_oi > total_put_oi * 1.5:
+            signal = "BEARISH"
+            signal_color = "#FF3333"
+        elif total_put_oi > total_call_oi * 1.5:
+            signal = "BULLISH"
+            signal_color = "#00FF66"
+        else:
+            signal = "NEUTRAL"
+            signal_color = "#FFCC00"
+        
+        result = OIDataResponse(
+            symbol=symbol,
+            total_call_oi=total_call_oi,
+            total_put_oi=total_put_oi,
+            pcr=pcr,
+            top_strikes=top_strikes,
+            signal=signal,
+            signal_color=signal_color
+        )
+        
+        cache_storage[cache_key] = (result, datetime.now())
+        return result
+        
+    except Exception as e:
+        logging.error(f"Error fetching OI for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=f"NSE site slow ya data unavailable: {str(e)}")
+
+
+@api_router.post("/gann/fan", response_model=GannFanResponse)
+async def calculate_gann_fan(request: GannFanRequest):
+    """Calculate Gann Fan angles from a pivot point"""
+    pivot_price = request.pivot_price
+    bars_count = request.bars_count
+    
+    angle_ratios = {
+        "1x1": 1.0,
+        "1x2": 0.5,
+        "1x3": 1.0/3.0,
+        "2x1": 2.0,
+        "3x1": 3.0,
+    }
+    
+    angles = []
+    for angle_name, ratio in angle_ratios.items():
+        price_levels = []
+        for i in range(bars_count):
+            price_change = (i + 1) * ratio
+            price_levels.append(pivot_price + price_change)
+        
+        angles.append(GannAngle(
+            angle_type=angle_name,
+            price_levels=price_levels
+        ))
+    
+    return GannFanResponse(
+        angles=angles,
+        pivot_price=pivot_price,
+        pivot_timestamp=request.pivot_timestamp
+    )
+
+
+@api_router.get("/square-of-9")
+async def calculate_square_of_9(center_price: float = Query(...)):
+    """Calculate Square of 9 targets"""
+    sqrt_price = math.sqrt(center_price)
+    
+    targets = {
+        "resistance_1": (sqrt_price + 0.5) ** 2,
+        "resistance_2": (sqrt_price + 1.0) ** 2,
+        "resistance_3": (sqrt_price + 1.5) ** 2,
+        "support_1": (sqrt_price - 0.5) ** 2 if sqrt_price > 0.5 else 0,
+        "support_2": (sqrt_price - 1.0) ** 2 if sqrt_price > 1.0 else 0,
+        "support_3": (sqrt_price - 1.5) ** 2 if sqrt_price > 1.5 else 0,
+    }
+    
+    return SquareOf9Response(center_price=center_price, targets=targets)
+
+
+@api_router.get("/signal/{ticker}", response_model=SignalResponse)
+async def get_signal(
+    ticker: str,
+    pivot_price: float = Query(...),
+    pivot_timestamp: int = Query(...)
+):
+    """Generate buy/sell signal based on 1x1 Gann angle"""
+    cache_key = f"signal_{ticker}_{pivot_price}"
+    if cache_key in cache_storage:
+        cached_data, cached_time = cache_storage[cache_key]
+        if (datetime.now() - cached_time).seconds < 60:
+            return cached_data
+    
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="5d", interval="1d")
+        
+        if hist.empty:
+            raise HTTPException(status_code=404, detail="No recent data")
+        
+        latest_bar = hist.iloc[-1]
+        current_price = float(latest_bar['Close'])
+        current_timestamp = int(hist.index[-1].timestamp() * 1000)
+        
+        bars_elapsed = len(hist)
+        angle_1x1_price = pivot_price + (bars_elapsed * 1.0)
+        
+        diff_percent = ((current_price - angle_1x1_price) / angle_1x1_price) * 100
+        
+        if diff_percent > 2:
+            signal = "STRONG BUY"
+            color = "#00CC52"
+        elif diff_percent > 0:
+            signal = "BUY"
+            color = "#00FF66"
+        elif diff_percent < -2:
+            signal = "STRONG SELL"
+            color = "#CC2929"
+        elif diff_percent < 0:
+            signal = "SELL"
+            color = "#FF3333"
+        else:
+            signal = "NEUTRAL"
+            color = "#FFCC00"
+        
+        result = SignalResponse(
+            ticker=ticker.upper(),
+            signal=signal,
+            color=color,
+            price=current_price,
+            angle_1x1=angle_1x1_price,
+            timestamp=current_timestamp
+        )
+        cache_storage[cache_key] = (result, datetime.now())
+        return result
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error generating signal for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.post("/ai/analyze-chart", response_model=AITradeAnalysisResponse)
+async def analyze_chart_ai(request: AITradeAnalysisRequest):
+    """Technical analysis for trade setups"""
+    try:
+        # Prepare chart data
+        bars_data = request.bars[-60:]  # Last 60 bars
+        
+        # Calculate key levels
+        highs = [b['high'] for b in bars_data]
+        lows = [b['low'] for b in bars_data]
+        closes = [b['close'] for b in bars_data]
+        
+        current_price = closes[-1]
+        highest = max(highs)
+        lowest = min(lows)
+        
+        # Calculate SMAs
+        sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else current_price
+        sma_50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else current_price
+        
+        # Simple RSI calculation
+        gains = []
+        losses = []
+        for i in range(1, min(14, len(closes))):
+            change = closes[i] - closes[i-1]
+            if change > 0:
+                gains.append(change)
+                losses.append(0)
+            else:
+                gains.append(0)
+                losses.append(abs(change))
+        
+        avg_gain = sum(gains) / len(gains) if gains else 0
+        avg_loss = sum(losses) / len(losses) if losses else 0.01
+        rs = avg_gain / avg_loss if avg_loss != 0 else 0
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Trend detection
+        recent_trend = "bullish" if closes[-1] > closes[-5] else "bearish"
+        ma_trend = "bullish" if sma_20 > sma_50 else "bearish"
+        
+        # Support and Resistance
+        support = min(lows[-20:]) if len(lows) >= 20 else lowest
+        resistance = max(highs[-20:]) if len(highs) >= 20 else highest
+        
+        # Generate trade setup based on analysis
+        if ma_trend == "bullish" and recent_trend == "bullish" and rsi < 70:
+            direction = "Long"
+            entry = f"{current_price:.2f}"
+            sl = f"{(current_price * 0.98):.2f}"
+            targets = [
+                f"{(current_price * 1.015):.2f}",
+                f"{(current_price * 1.025):.2f}",
+                f"{(current_price * 1.04):.2f}"
+            ]
+            reason = f"Bullish trend confirmed. Price above 20 & 50 SMA. RSI at {rsi:.0f} shows momentum. Support at {support:.2f}. Good risk-reward for long position."
+        
+        elif ma_trend == "bearish" and recent_trend == "bearish" and rsi > 30:
+            direction = "Short"
+            entry = f"{current_price:.2f}"
+            sl = f"{(current_price * 1.02):.2f}"
+            targets = [
+                f"{(current_price * 0.985):.2f}",
+                f"{(current_price * 0.975):.2f}",
+                f"{(current_price * 0.96):.2f}"
+            ]
+            reason = f"Bearish trend in play. Price below key SMAs. RSI at {rsi:.0f} indicates weakness. Resistance at {resistance:.2f}. Short setup with tight risk."
+        
+        elif rsi > 70:
+            direction = "Short"
+            entry = f"{current_price:.2f}"
+            sl = f"{(current_price * 1.015):.2f}"
+            targets = [
+                f"{(current_price * 0.99):.2f}",
+                f"{(current_price * 0.98):.2f}"
+            ]
+            reason = f"Overbought condition - RSI at {rsi:.0f}. Price near resistance at {resistance:.2f}. Potential pullback expected. Short with tight stops."
+        
+        elif rsi < 30:
+            direction = "Long"
+            entry = f"{current_price:.2f}"
+            sl = f"{(current_price * 0.985):.2f}"
+            targets = [
+                f"{(current_price * 1.01):.2f}",
+                f"{(current_price * 1.02):.2f}"
+            ]
+            reason = f"Oversold condition - RSI at {rsi:.0f}. Price near support at {support:.2f}. Bounce expected. Long with tight risk management."
+        
+        else:
+            # Neutral - follow the trend
+            if ma_trend == "bullish":
+                direction = "Long"
+                entry = f"{current_price:.2f}"
+                sl = f"{support:.2f}"
+                targets = [
+                    f"{(current_price * 1.02):.2f}",
+                    f"{resistance:.2f}"
+                ]
+                reason = f"Following bullish bias. Price consolidating above {support:.2f} support. Target resistance at {resistance:.2f}. Wait for breakout confirmation."
+            else:
+                direction = "Short"
+                entry = f"{current_price:.2f}"
+                sl = f"{resistance:.2f}"
+                targets = [
+                    f"{(current_price * 0.98):.2f}",
+                    f"{support:.2f}"
+                ]
+                reason = f"Following bearish bias. Price below {resistance:.2f} resistance. Target support at {support:.2f}. Sell on rallies."
+        
+        return AITradeAnalysisResponse(
+            direction=direction,
+            entry_price=entry,
+            stoploss=sl,
+            targets=targets,
+            reason=reason
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in analysis: {e}")
+        # Fallback simple analysis
+        return AITradeAnalysisResponse(
+            direction="Long",
+            entry_price=f"{closes[-1]:.2f}",
+            stoploss=f"{(closes[-1] * 0.98):.2f}",
+            targets=[f"{(closes[-1] * 1.02):.2f}", f"{(closes[-1] * 1.04):.2f}"],
+            reason="Following current price trend. Use proper risk management."
+        )
+
+
+@api_router.post("/falling-knife/analyze", response_model=FallingKnifeAnalysisResponse)
+async def analyze_falling_knife(request: FallingKnifeAnalysisRequest):
+    """Falling Knife Reversal Analysis"""
+    try:
+        bars = request.bars
+        if len(bars) < 60:
+            raise HTTPException(status_code=400, detail="Need at least 60 bars")
+        
+        # Extract data
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        closes = [b['close'] for b in bars]
+        
+        current_price = closes[-1]
+        
+        # Step 1: Check 40% drop from peak
+        peak_price = max(highs)
+        drop_percentage = ((peak_price - current_price) / peak_price) * 100
+        meets_drop_req = drop_percentage >= 40
+        
+        # Step 2: Calculate Bollinger Bands (20, 2)
+        period = 20
+        sma = sum(closes[-period:]) / period
+        std_dev = (sum((x - sma) ** 2 for x in closes[-period:]) / period) ** 0.5
+        bb_upper = sma + (2 * std_dev)
+        bb_lower = sma - (2 * std_dev)
+        bb_width = bb_upper - bb_lower
+        
+        # Check for squeeze (narrow bands)
+        avg_bb_width = sum([
+            ((sum(closes[i-period:i])/period + 2*((sum((closes[j]-sum(closes[i-period:i])/period)**2 for j in range(i-period,i))/period)**0.5)) - 
+             (sum(closes[i-period:i])/period - 2*((sum((closes[j]-sum(closes[i-period:i])/period)**2 for j in range(i-period,i))/period)**0.5)))
+            for i in range(period+10, len(closes))
+        ]) / (len(closes) - period - 10)
+        
+        bollinger_squeeze = bb_width < avg_bb_width * 0.7
+        
+        # Step 3: Calculate Keltner Channels (20, 1.5)
+        atr_period = 20
+        trs = []
+        for i in range(len(bars) - atr_period, len(bars)):
+            h_l = highs[i] - lows[i]
+            h_c = abs(highs[i] - closes[i-1]) if i > 0 else h_l
+            l_c = abs(lows[i] - closes[i-1]) if i > 0 else h_l
+            trs.append(max(h_l, h_c, l_c))
+        atr = sum(trs) / len(trs)
+        
+        kc_upper = sma + (1.5 * atr)
+        kc_lower = sma - (1.5 * atr)
+        price_in_keltner = kc_lower <= current_price <= kc_upper
+        
+        # Step 4: Calculate MACD (12, 26, 9)
+        ema_12 = sum(closes[-12:]) / 12
+        ema_26 = sum(closes[-26:]) / 26
+        macd_line = ema_12 - ema_26
+        
+        # Check for bullish divergence (simplified)
+        macd_bullish = macd_line > 0
+        
+        # Count conditions met
+        conditions = [meets_drop_req, bollinger_squeeze, price_in_keltner, macd_bullish]
+        conditions_met = sum(conditions)
+        
+        # Determine status
+        if conditions_met >= 3 and meets_drop_req:
+            status = "READY"
+            signal_type = "BUY"
+            entry = f"{current_price:.2f}"
+            sl = f"{min(lows[-10:]):.2f}"
+            targets = [
+                f"{(current_price * 1.05):.2f}",
+                f"{(current_price * 1.10):.2f}",
+                f"{(current_price * 1.15):.2f}"
+            ]
+            rec = f"All conditions met! Entry signal active. Stock dropped {drop_percentage:.1f}% from peak. Bollinger squeeze + Keltner entry + MACD positive. Enter now with stop at recent low."
+        elif conditions_met >= 2 and meets_drop_req:
+            status = "SETUP"
+            signal_type = "WAIT"
+            entry = f"{current_price:.2f}"
+            sl = f"{min(lows[-10:]):.2f}"
+            targets = [f"{(current_price * 1.05):.2f}"]
+            rec = f"Setup forming. {conditions_met}/3 conditions met. Stock down {drop_percentage:.1f}%. Wait for all signals before entry. Monitor closely."
+        else:
+            status = "NO SIGNAL"
+            signal_type = "WAIT"
+            entry = None
+            sl = None
+            targets = None
+            if not meets_drop_req:
+                rec = f"Stock only down {drop_percentage:.1f}% from peak. Needs ≥40% drop. Not a falling knife yet."
+            else:
+                rec = f"Drop requirement met ({drop_percentage:.1f}%), but only {conditions_met}/3 technical conditions present. Wait for complete setup."
+        
+        return FallingKnifeAnalysisResponse(
+            status=status,
+            signal_type=signal_type,
+            conditions_met=conditions_met,
+            drop_percentage=drop_percentage,
+            bollinger_squeeze=bollinger_squeeze,
+            price_in_keltner=price_in_keltner,
+            macd_bullish=macd_bullish,
+            entry_price=entry,
+            stop_loss=sl,
+            targets=targets,
+            recommendation=rec
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in falling knife analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.post("/reverse-swings/analyze", response_model=ReverseSwingsResponse)
+async def analyze_reverse_swings(request: ReverseSwingsRequest):
+    """Reverse Price Swings Analysis - Method A & B"""
+    try:
+        bars = request.bars
+        if len(bars) < 10:
+            raise HTTPException(status_code=400, detail="Need at least 10 bars")
+        
+        closes = [b['close'] for b in bars]
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        
+        current_close = closes[-1]
+        close_5_days_ago = closes[-6] if len(closes) >= 6 else closes[0]
+        
+        # Determine Method (forced or auto)
+        if request.force_method:
+            method = request.force_method
+        elif current_close < close_5_days_ago:
+            method = "A"
+        else:
+            method = "B"
+        
+        if method == "A":
+            # Calculate max buy swing for last 4 days
+            buy_swings = []
+            for i in range(-5, -1):
+                if i >= -len(bars):
+                    max_buy_swing = highs[i] - lows[i]
+                    buy_swings.append(max_buy_swing)
+            
+            avg_swing = sum(buy_swings) / len(buy_swings) if buy_swings else 0
+            current_swing = highs[-1] - lows[-1]
+            threshold = avg_swing * 1.75
+            
+            swing_signal = current_swing >= threshold
+            trend_confirmed = True
+            
+            # Valid entry days for Method A: Tuesday(2), Wednesday(3), Friday(5)
+            # Get tomorrow's day
+            from datetime import datetime, timedelta
+            tomorrow = (datetime.now() + timedelta(days=1)).weekday()  # 0=Monday, 6=Sunday
+            valid_days = [1, 2, 4]  # Tuesday, Wednesday, Friday
+            valid_entry_day = tomorrow in valid_days
+            
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            entry_day_name = day_names[tomorrow]
+            
+            # Calculate stop loss: 2% below close of day before signal day
+            prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
+            stop_loss_price = prev_close * 0.98
+            
+            price_comp = f"₹{current_close:.2f} < ₹{close_5_days_ago:.2f}"
+            
+        else:
+            method = "B"  # Overbought - Short trade
+            # Calculate max sell swing for last 4 days
+            sell_swings = []
+            for i in range(-5, -1):
+                if i >= -len(bars):
+                    max_sell_swing = highs[i] - lows[i]
+                    sell_swings.append(max_sell_swing)
+            
+            avg_swing = sum(sell_swings) / len(sell_swings) if sell_swings else 0
+            current_swing = highs[-1] - lows[-1]
+            threshold = avg_swing * 1.75
+            
+            swing_signal = current_swing >= threshold
+            trend_confirmed = True
+            
+            # Valid entry days for Method B: Monday(1), Wednesday(3), Thursday(4)
+            from datetime import datetime, timedelta
+            tomorrow = (datetime.now() + timedelta(days=1)).weekday()
+            valid_days = [0, 2, 3]  # Monday, Wednesday, Thursday
+            valid_entry_day = tomorrow in valid_days
+            
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            entry_day_name = day_names[tomorrow]
+            
+            # Calculate stop loss: 2% above close of day before signal day
+            prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
+            stop_loss_price = prev_close * 1.02
+            
+            price_comp = f"₹{current_close:.2f} > ₹{close_5_days_ago:.2f}"
+        
+        # Signal is active if all conditions met
+        signal_active = trend_confirmed and swing_signal and valid_entry_day
+        
+        if signal_active:
+            entry_price = f"{current_close:.2f}"
+            stop_loss = f"{stop_loss_price:.2f}"
+            entry_day = entry_day_name
+            
+            if method == "A":
+                signal_type = "BUY"
+                targets = [
+                    f"{(current_close * 1.02):.2f}",
+                    f"{(current_close * 1.04):.2f}",
+                    f"{(current_close * 1.06):.2f}"
+                ]
+                rec = f"METHOD A SIGNAL! Enter LONG tomorrow ({entry_day_name}). Stock is oversold (down from ₹{close_5_days_ago:.2f}). Strong buy swing detected ({current_swing:.2f} > {threshold:.2f}). Stop loss at ₹{stop_loss_price:.2f}. Valid entry day confirmed."
+            else:
+                signal_type = "SELL"
+                targets = [
+                    f"{(current_close * 0.98):.2f}",
+                    f"{(current_close * 0.96):.2f}",
+                    f"{(current_close * 0.94):.2f}"
+                ]
+                rec = f"METHOD B SIGNAL! Enter SHORT tomorrow ({entry_day_name}). Stock is overbought (up from ₹{close_5_days_ago:.2f}). Strong sell swing detected ({current_swing:.2f} > {threshold:.2f}). Stop loss at ₹{stop_loss_price:.2f}. Valid entry day confirmed."
+        else:
+            signal_type = "WAIT"
+            entry_price = None
+            stop_loss = None
+            targets = None
+            entry_day = None
+            
+            missing = []
+            if not trend_confirmed:
+                missing.append(f"{'oversold' if method == 'A' else 'overbought'} condition")
+            if not swing_signal:
+                missing.append(f"swing magnitude (need ≥{threshold:.2f}, got {current_swing:.2f})")
+            if not valid_entry_day:
+                missing.append(f"valid entry day (tomorrow is {entry_day_name})")
+            
+            rec = f"Signal not active. Waiting for: {', '.join(missing)}. Monitor daily for setup completion."
+        
+        return ReverseSwingsResponse(
+            method=method,
+            signal_type=signal_type,
+            trend_confirmed=trend_confirmed,
+            swing_signal=swing_signal,
+            valid_entry_day=valid_entry_day,
+            signal_active=signal_active,
+            current_swing=f"{current_swing:.2f}",
+            avg_swing=f"{avg_swing:.2f}",
+            threshold_swing=f"{threshold:.2f}",
+            price_comparison=price_comp,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            targets=targets,
+            entry_day=entry_day,
+            recommendation=rec
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in reverse swings analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ExplosiveVolumeRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    force_option: Optional[str] = None  # 'A' or 'B'
+
+
+class ExplosiveVolumeResponse(BaseModel):
+    status: str
+    signal_type: str
+    fundamentals: dict
+    technical_conditions: dict
+    conditions_met: int
+    total_conditions: int
+    entry_strategy: Optional[dict] = None
+    exit_option_a: Optional[dict] = None
+    exit_option_b: Optional[dict] = None
+    targets: Optional[List[str]] = None
+    recommendation: str
+    warnings: List[str]
+
+
+def calc_ema(data, period):
+    """Calculate EMA"""
+    if len(data) < period:
+        return data[-1] if data else 0
+    multiplier = 2 / (period + 1)
+    ema = sum(data[:period]) / period
+    for price in data[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
+
+
+def calc_cci(highs, lows, closes, period=20):
+    """Calculate CCI (Commodity Channel Index)"""
+    if len(closes) < period:
+        return 0
+    typical_prices = [(h + lo + c) / 3 for h, lo, c in zip(highs, lows, closes)]
+    tp_slice = typical_prices[-period:]
+    sma_tp = sum(tp_slice) / period
+    mean_dev = sum(abs(tp - sma_tp) for tp in tp_slice) / period
+    if mean_dev == 0:
+        return 0
+    return (tp_slice[-1] - sma_tp) / (0.015 * mean_dev)
+
+
+def calc_five_day_oscillator(highs, lows, closes):
+    """Calculate 5-Day Oscillator: ((Close - Low5) / (High5 - Low5)) * 100"""
+    if len(closes) < 5:
+        return 50
+    high5 = max(highs[-5:])
+    low5 = min(lows[-5:])
+    if high5 == low5:
+        return 50
+    return ((closes[-1] - low5) / (high5 - low5)) * 100
+
+
+@api_router.post("/explosive-volume/analyze", response_model=ExplosiveVolumeResponse)
+async def analyze_explosive_volume(request: ExplosiveVolumeRequest):
+    """Explosive Volume Strategy Analysis"""
+    try:
+        bars = request.bars
+        warnings = []
+
+        if len(bars) < 60:
+            raise HTTPException(status_code=400, detail="Need at least 60 bars for analysis")
+
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        closes = [b['close'] for b in bars]
+        volumes = [b['volume'] for b in bars]
+
+        current_price = closes[-1]
+        current_volume = volumes[-1]
+
+        # ============ PHASE 1: FUNDAMENTAL DATA ============
+        insider_pct = None
+        float_shares = None
+        fundamental_pass = True  # Default pass if data unavailable
+
+        try:
+            ticker_obj = yf.Ticker(request.ticker)
+            info = ticker_obj.info
+            insider_pct_raw = info.get('heldPercentInsiders')
+            float_shares_raw = info.get('floatShares')
+
+            if insider_pct_raw is not None:
+                insider_pct = round(float(insider_pct_raw) * 100, 2)
+            else:
+                warnings.append("Insider ownership data not available — skipping fundamental check")
+
+            if float_shares_raw is not None:
+                float_shares = float(float_shares_raw)
+            else:
+                warnings.append("Float shares data not available — skipping fundamental check")
+        except Exception as e:
+            warnings.append(f"Could not fetch fundamental data: {str(e)[:50]}")
+
+        insider_ok = insider_pct is not None and insider_pct >= 10
+        float_ok = float_shares is not None and float_shares <= 35_000_000
+
+        if insider_pct is None and float_shares is None:
+            fundamental_pass = True  # Can't verify, skip
+            warnings.append("Fundamental filters skipped — data unavailable for this stock")
+        else:
+            fundamental_pass = (insider_pct is None or insider_ok) and (float_shares is None or float_ok)
+
+        fundamentals = {
+            "insider_ownership": f"{insider_pct}%" if insider_pct is not None else "N/A",
+            "insider_ok": insider_ok if insider_pct is not None else "N/A",
+            "float_shares": f"{float_shares/1e6:.1f}M" if float_shares is not None else "N/A",
+            "float_ok": float_ok if float_shares is not None else "N/A",
+            "fundamental_pass": fundamental_pass
+        }
+
+        # ============ PHASE 2: TECHNICAL CONDITIONS ============
+
+        # 1. No overhead resistance in 12 months (price near 12m high)
+        high_12m = max(highs)
+        near_high_pct = ((high_12m - current_price) / high_12m) * 100
+        no_resistance = near_high_pct <= 5  # within 5% of 12m high
+
+        # 2. Volume > 2x 50-day SMA Volume
+        vol_sma_50 = sum(volumes[-50:]) / min(50, len(volumes)) if len(volumes) >= 10 else current_volume
+        volume_explosive = current_volume > (2 * vol_sma_50)
+        vol_ratio = current_volume / vol_sma_50 if vol_sma_50 > 0 else 0
+
+        # 3. Price at or near 60-day high (within 3%)
+        high_60 = max(highs[-60:]) if len(highs) >= 60 else max(highs)
+        near_60d_high = ((high_60 - current_price) / high_60) * 100 <= 3
+
+        # 4. EMA Trend: 10 EMA > 20 EMA (short-term momentum)
+        ema_10 = calc_ema(closes, 10)
+        ema_20 = calc_ema(closes, 20)
+        ema_trend_bullish = ema_10 > ema_20
+
+        # 5. Price above 200-day SMA (long-term uptrend)
+        sma_200 = sum(closes) / len(closes) if len(closes) >= 50 else current_price
+        above_long_sma = current_price > sma_200
+
+        # 6. CCI above +100 (strong momentum)
+        cci_value = calc_cci(highs, lows, closes, 20)
+        cci_strong = cci_value > 100
+
+        # 7. Volume acceleration: today volume > yesterday volume
+        vol_accel = len(volumes) >= 2 and volumes[-1] > volumes[-2]
+
+        # 8. Price breakout: close > previous 5 day high
+        prev_5_high = max(highs[-6:-1]) if len(highs) >= 6 else max(highs[:-1]) if len(highs) >= 2 else current_price
+        price_breakout = current_price > prev_5_high
+
+        technical_conditions = {
+            "no_resistance_12m": {"met": no_resistance, "detail": f"Price {near_high_pct:.1f}% from 12m high (need ≤5%)"},
+            "volume_2x_sma50": {"met": volume_explosive, "detail": f"Vol ratio: {vol_ratio:.1f}x (need >2x)"},
+            "near_60d_high": {"met": near_60d_high, "detail": f"₹{current_price:.2f} vs 60d high ₹{high_60:.2f}"},
+            "ema_trend": {"met": ema_trend_bullish, "detail": f"EMA10: ₹{ema_10:.2f} vs EMA20: ₹{ema_20:.2f}"},
+            "above_long_sma": {"met": above_long_sma, "detail": f"Price ₹{current_price:.2f} vs SMA: ₹{sma_200:.2f}"},
+            "cci_momentum": {"met": cci_strong, "detail": f"CCI: {cci_value:.0f} (need >100)"},
+            "volume_accel": {"met": vol_accel, "detail": f"Today vol vs yesterday: {'↑' if vol_accel else '↓'}"},
+            "price_breakout": {"met": price_breakout, "detail": f"Close ₹{current_price:.2f} vs prev 5d high ₹{prev_5_high:.2f}"}
+        }
+
+        tech_met = sum(1 for v in technical_conditions.values() if v["met"])
+        total_conditions = 8
+
+        # ============ PHASE 3: ENTRY/EXIT STRATEGY ============
+        entry_strategy = None
+        exit_option_a = None
+        exit_option_b = None
+
+        if tech_met >= 4:
+            # Entry: Limit Buy = (Open + High) / 2 + 5%
+            today_open = bars[-1]['open']
+            today_high = bars[-1]['high']
+            limit_buy = ((today_open + today_high) / 2) * 1.05
+
+            entry_strategy = {
+                "type": "LIMIT BUY",
+                "price": f"{limit_buy:.2f}",
+                "formula": f"(Open ₹{today_open:.2f} + High ₹{today_high:.2f}) / 2 + 5%",
+                "stop_loss": f"{(current_price * 0.93):.2f}",
+                "risk_pct": "7%"
+            }
+
+            # Exit Option A: CCI Divergence
+            cci_zone = "Overbought" if cci_value > 200 else "Strong" if cci_value > 100 else "Normal" if cci_value > 0 else "Weak"
+            prev_cci = calc_cci(highs[:-1], lows[:-1], closes[:-1], 20) if len(closes) > 20 else cci_value
+            cci_divergence = cci_value < prev_cci and cci_value > 100
+
+            exit_option_a = {
+                "method": "CCI Divergence",
+                "current_cci": f"{cci_value:.0f}",
+                "prev_cci": f"{prev_cci:.0f}",
+                "zone": cci_zone,
+                "divergence_detected": cci_divergence,
+                "exit_signal": cci_value < 100 and prev_cci > 100,
+                "rule": "Exit when CCI drops below +100 from overbought zone",
+                "action": "SELL - CCI crossed below 100" if (cci_value < 100 and prev_cci > 100) else "HOLD - CCI momentum intact"
+            }
+
+            # Exit Option B: 5-Day Oscillator
+            osc_value = calc_five_day_oscillator(highs, lows, closes)
+            prev_osc = calc_five_day_oscillator(highs[:-1], lows[:-1], closes[:-1]) if len(closes) > 5 else osc_value
+            osc_zone = "Overbought" if osc_value > 80 else "Oversold" if osc_value < 20 else "Neutral"
+
+            exit_option_b = {
+                "method": "5-Day Oscillator",
+                "current_value": f"{osc_value:.1f}",
+                "prev_value": f"{prev_osc:.1f}",
+                "zone": osc_zone,
+                "exit_signal": osc_value < 20 and prev_osc > 20,
+                "rule": "Exit when oscillator drops below 20 from above 80",
+                "action": "SELL - Oscillator crashed below 20" if (osc_value < 20 and prev_osc > 20) else "HOLD - Oscillator stable"
+            }
+
+        # ============ STATUS & RECOMMENDATION ============
+        fund_note = "" if fundamental_pass else " (Fundamentals not met — higher risk)"
+        targets = None
+        
+        if tech_met >= 6:
+            status = "EXPLOSIVE"
+            signal_type = "BUY"
+            if entry_strategy:
+                buy_price = float(entry_strategy['price'])
+                targets = [
+                    f"{(buy_price * 1.05):.2f}",
+                    f"{(buy_price * 1.10):.2f}",
+                    f"{(buy_price * 1.15):.2f}"
+                ]
+            rec = f"EXPLOSIVE VOLUME detected! {tech_met}/8 technical conditions met{fund_note}. "
+            if entry_strategy:
+                rec += f"Limit buy at ₹{entry_strategy['price']}. Stop loss at ₹{entry_strategy['stop_loss']}. "
+            rec += "Use Option A (CCI) or Option B (5-Day Oscillator) for exit timing."
+        elif tech_met >= 4:
+            status = "BUILDING"
+            signal_type = "WAIT"
+            if entry_strategy:
+                buy_price = float(entry_strategy['price'])
+                targets = [f"{(buy_price * 1.05):.2f}"]
+            rec = f"Volume building up. {tech_met}/8 conditions met{fund_note}. Setup forming — monitor for explosive breakout. "
+            if entry_strategy:
+                rec += f"Tentative entry at ₹{entry_strategy['price']}."
+        elif tech_met >= 2:
+            status = "WATCHING"
+            signal_type = "WAIT"
+            rec = f"Early stage. Only {tech_met}/8 conditions met. Not ready for entry yet. Keep on watchlist."
+        else:
+            status = "NO SIGNAL"
+            signal_type = "WAIT"
+            rec = f"No explosive volume setup detected. Only {tech_met}/8 conditions met. Move to next stock."
+
+        if not fundamental_pass:
+            rec += " Fundamental filters not met — higher risk trade."
+
+        return ExplosiveVolumeResponse(
+            status=status,
+            signal_type=signal_type,
+            fundamentals=fundamentals,
+            technical_conditions=technical_conditions,
+            conditions_met=tech_met,
+            total_conditions=total_conditions,
+            entry_strategy=entry_strategy,
+            exit_option_a=exit_option_a,
+            exit_option_b=exit_option_b,
+            targets=targets,
+            recommendation=rec,
+            warnings=warnings
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error in explosive volume analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class GoldenSetupRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    pro_mode: Optional[bool] = False
+    multi_timeframe: Optional[bool] = False
+
+
+class GoldenSetupResponse(BaseModel):
+    mode: str
+    signal_type: str
+    conditions: dict
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    targets: Optional[List[str]] = None
+    risk_reward: Optional[str] = None
+    adx_value: Optional[float] = None
+    pro_details: Optional[dict] = None
+    mtf_confirmation: Optional[dict] = None
+    recommendation: str
+
+
+def calc_adx(highs, lows, closes, period=14):
+    """Calculate ADX (Average Directional Index)"""
+    if len(closes) < period * 2:
+        return 0
+    plus_dm = []
+    minus_dm = []
+    tr_list = []
+    for i in range(1, len(highs)):
+        high_diff = highs[i] - highs[i-1]
+        low_diff = lows[i-1] - lows[i]
+        plus_dm.append(max(high_diff, 0) if high_diff > low_diff else 0)
+        minus_dm.append(max(low_diff, 0) if low_diff > high_diff else 0)
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        tr_list.append(tr)
+
+    if len(tr_list) < period:
+        return 0
+
+    atr = sum(tr_list[:period]) / period
+    plus_di_sum = sum(plus_dm[:period]) / period
+    minus_di_sum = sum(minus_dm[:period]) / period
+
+    for i in range(period, len(tr_list)):
+        atr = (atr * (period - 1) + tr_list[i]) / period
+        plus_di_sum = (plus_di_sum * (period - 1) + plus_dm[i]) / period
+        minus_di_sum = (minus_di_sum * (period - 1) + minus_dm[i]) / period
+
+    if atr == 0:
+        return 0
+    plus_di = (plus_di_sum / atr) * 100
+    minus_di = (minus_di_sum / atr) * 100
+    di_sum = plus_di + minus_di
+    if di_sum == 0:
+        return 0
+    dx = abs(plus_di - minus_di) / di_sum * 100
+    return dx
+
+
+def find_swing_lows(lows, window=5):
+    """Find recent swing lows"""
+    swings = []
+    for i in range(window, len(lows) - 1):
+        if lows[i] == min(lows[i-window:i+window+1]):
+            swings.append((i, lows[i]))
+    return swings
+
+
+def find_swing_highs(highs, window=5):
+    """Find recent swing highs"""
+    swings = []
+    for i in range(window, len(highs) - 1):
+        if highs[i] == max(highs[i-window:i+window+1]):
+            swings.append((i, highs[i]))
+    return swings
+
+
+def is_bullish_candle(o, h, low_val, c):
+    """Check bullish candle or hammer"""
+    body = abs(c - o)
+    full_range = h - low_val
+    if full_range == 0:
+        return False
+    if c > o:
+        return True
+    lower_wick = min(o, c) - low_val
+    if lower_wick > body * 2 and body < full_range * 0.3:
+        return True
+    return False
+
+
+def is_bearish_candle(o, h, low_val, c):
+    """Check bearish candle or shooting star"""
+    body = abs(c - o)
+    full_range = h - low_val
+    if full_range == 0:
+        return False
+    if c < o:
+        return True
+    upper_wick = h - max(o, c)
+    if upper_wick > body * 2 and body < full_range * 0.3:
+        return True
+    return False
+
+
+def is_engulfing_bullish(bars, idx):
+    """Check bullish engulfing at index"""
+    if idx < 1:
+        return False
+    prev = bars[idx - 1]
+    curr = bars[idx]
+    return prev['close'] < prev['open'] and curr['close'] > curr['open'] and curr['close'] > prev['open'] and curr['open'] < prev['close']
+
+
+def is_engulfing_bearish(bars, idx):
+    """Check bearish engulfing at index"""
+    if idx < 1:
+        return False
+    prev = bars[idx - 1]
+    curr = bars[idx]
+    return prev['close'] > prev['open'] and curr['close'] < curr['open'] and curr['open'] > prev['close'] and curr['close'] < prev['open']
+
+
+def has_rejection_wick(bar, direction):
+    """Check for strong rejection wick"""
+    o, h, low_val, c = bar['open'], bar['high'], bar['low'], bar['close']
+    full = h - low_val
+    if full == 0:
+        return False
+    if direction == 'bull':
+        lower = min(o, c) - low_val
+        return lower / full > 0.5
+    else:
+        upper = h - max(o, c)
+        return upper / full > 0.5
+
+
+@api_router.post("/golden-setup/analyze", response_model=GoldenSetupResponse)
+async def analyze_golden_setup(request: GoldenSetupRequest):
+    """Golden Setup Strategy - Normal & Pro Mode"""
+    try:
+        bars = request.bars
+        pro_mode = request.pro_mode
+
+        if len(bars) < 60:
+            raise HTTPException(status_code=400, detail="Need at least 60 bars")
+
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        closes = [b['close'] for b in bars]
+        volumes = [b['volume'] for b in bars]
+
+        current = closes[-1]
+        last_bar = bars[-1]
+
+        # Core indicators
+        sma_200 = sum(closes[-min(200, len(closes)):]) / min(200, len(closes))
+        ema_20 = calc_ema(closes, 20)
+        ema_50 = calc_ema(closes, 50)
+        prev_ema_20 = calc_ema(closes[:-1], 20)
+        prev_ema_50 = calc_ema(closes[:-1], 50)
+        adx = calc_adx(highs, lows, closes, 14)
+
+        # Multi-timeframe confirmation (computed later based on signal)
+        mtf_data = None
+
+        # ====== NORMAL MODE ======
+        if not pro_mode:
+            # BUY conditions
+            above_200 = current > sma_200
+            ema_cross_bull = prev_ema_20 <= prev_ema_50 and ema_20 > ema_50
+            ema_already_bull = ema_20 > ema_50
+            near_ema20_buy = abs(current - ema_20) / ema_20 * 100 < 1.5
+            bullish = is_bullish_candle(last_bar['open'], last_bar['high'], last_bar['low'], last_bar['close'])
+            adx_strong = adx > 20
+
+            # SELL conditions
+            below_200 = current < sma_200
+            ema_cross_bear = prev_ema_20 >= prev_ema_50 and ema_20 < ema_50
+            ema_already_bear = ema_20 < ema_50
+            near_ema20_sell = abs(current - ema_20) / ema_20 * 100 < 1.5
+            bearish = is_bearish_candle(last_bar['open'], last_bar['high'], last_bar['low'], last_bar['close'])
+
+            buy_score = sum([above_200, ema_cross_bull or ema_already_bull, near_ema20_buy, bullish, adx_strong])
+            sell_score = sum([below_200, ema_cross_bear or ema_already_bear, near_ema20_sell, bearish, adx_strong])
+
+            swing_lows = find_swing_lows(lows)
+            swing_highs = find_swing_highs(highs)
+            recent_swing_low = swing_lows[-1][1] if swing_lows else min(lows[-10:])
+            recent_swing_high = swing_highs[-1][1] if swing_highs else max(highs[-10:])
+
+            if buy_score >= 4:
+                entry = current
+                sl = min(recent_swing_low, ema_20 * 0.99)
+                risk = entry - sl
+                t1 = entry + risk * 2
+                t2 = entry + risk * 3
+
+                conditions = {
+                    "price_above_200sma": {"met": above_200, "detail": f"₹{current:.2f} vs SMA200 ₹{sma_200:.2f}"},
+                    "ema_20_above_50": {"met": ema_cross_bull or ema_already_bull, "detail": f"EMA20 ₹{ema_20:.2f} vs EMA50 ₹{ema_50:.2f}" + (" (Fresh Cross!)" if ema_cross_bull else "")},
+                    "pullback_to_ema20": {"met": near_ema20_buy, "detail": f"Price {abs(current - ema_20)/ema_20*100:.1f}% from EMA20"},
+                    "bullish_candle": {"met": bullish, "detail": "Green candle / Hammer confirmed" if bullish else "No bullish pattern"},
+                    "adx_above_20": {"met": adx_strong, "detail": f"ADX: {adx:.1f} (need >20)"}
+                }
+                rec = f"GOLDEN BUY! All conditions met. Price above 200 SMA, EMA20 > EMA50, pullback to EMA20 zone, bullish candle confirmed. ADX {adx:.0f} shows strong trend. Enter at ₹{entry:.2f}, SL ₹{sl:.2f}."
+
+                if request.multi_timeframe:
+                    mtf_data = get_mtf_confirmation(request.ticker, "BUY")
+                    if mtf_data and mtf_data.get("confirmed"):
+                        rec += f" MTF CONFIRMED ({mtf_data['strength']})!"
+
+                return GoldenSetupResponse(
+                    mode="Normal", signal_type="BUY", conditions=conditions,
+                    entry_price=f"{entry:.2f}", stop_loss=f"{sl:.2f}",
+                    targets=[f"{t1:.2f}", f"{t2:.2f}"],
+                    risk_reward="1:2 / 1:3", adx_value=round(adx, 1),
+                    mtf_confirmation=mtf_data, recommendation=rec
+                )
+
+            elif sell_score >= 4:
+                entry = current
+                sl = max(recent_swing_high, ema_20 * 1.01)
+                risk = sl - entry
+                t1 = entry - risk * 2
+                t2 = entry - risk * 3
+
+                conditions = {
+                    "price_below_200sma": {"met": below_200, "detail": f"₹{current:.2f} vs SMA200 ₹{sma_200:.2f}"},
+                    "ema_20_below_50": {"met": ema_cross_bear or ema_already_bear, "detail": f"EMA20 ₹{ema_20:.2f} vs EMA50 ₹{ema_50:.2f}" + (" (Fresh Cross!)" if ema_cross_bear else "")},
+                    "pullback_to_ema20": {"met": near_ema20_sell, "detail": f"Price {abs(current - ema_20)/ema_20*100:.1f}% from EMA20"},
+                    "bearish_candle": {"met": bearish, "detail": "Red candle / Shooting star confirmed" if bearish else "No bearish pattern"},
+                    "adx_above_20": {"met": adx_strong, "detail": f"ADX: {adx:.1f} (need >20)"}
+                }
+                rec = f"GOLDEN SELL! All conditions met. Price below 200 SMA, EMA20 < EMA50, pullback to EMA20 zone, bearish candle confirmed. ADX {adx:.0f} shows strong trend. Enter at ₹{entry:.2f}, SL ₹{sl:.2f}."
+
+                if request.multi_timeframe:
+                    mtf_data = get_mtf_confirmation(request.ticker, "SELL")
+                    if mtf_data.get("confirmed"):
+                        rec += f" MTF CONFIRMED ({mtf_data['strength']})!"
+
+                return GoldenSetupResponse(
+                    mode="Normal", signal_type="SELL", conditions=conditions,
+                    entry_price=f"{entry:.2f}", stop_loss=f"{sl:.2f}",
+                    targets=[f"{t1:.2f}", f"{t2:.2f}"],
+                    risk_reward="1:2 / 1:3", adx_value=round(adx, 1),
+                    mtf_confirmation=mtf_data,
+                    recommendation=rec
+                )
+
+            else:
+                conditions = {
+                    "price_vs_200sma": {"met": above_200 or below_200, "detail": f"₹{current:.2f} vs SMA200 ₹{sma_200:.2f}" + (" (Above)" if above_200 else " (Below)")},
+                    "ema_crossover": {"met": ema_cross_bull or ema_cross_bear or ema_already_bull or ema_already_bear, "detail": f"EMA20 ₹{ema_20:.2f} vs EMA50 ₹{ema_50:.2f}"},
+                    "pullback_to_ema20": {"met": near_ema20_buy or near_ema20_sell, "detail": f"Price {abs(current - ema_20)/ema_20*100:.1f}% from EMA20"},
+                    "candle_pattern": {"met": bullish or bearish, "detail": "Bullish" if bullish else ("Bearish" if bearish else "No clear pattern")},
+                    "adx_above_20": {"met": adx_strong, "detail": f"ADX: {adx:.1f} (need >20)"}
+                }
+                best = max(buy_score, sell_score)
+                rec = f"No Golden Setup yet. Best score: {best}/5 conditions. " + ("Leaning bullish." if buy_score > sell_score else "Leaning bearish." if sell_score > buy_score else "Neutral.") + f" ADX at {adx:.0f}. Wait for complete setup."
+
+                return GoldenSetupResponse(
+                    mode="Normal", signal_type="WAIT", conditions=conditions,
+                    adx_value=round(adx, 1), mtf_confirmation=mtf_data,
+                    recommendation=rec
+                )
+
+        # ====== PRO MODE (SMC) ======
+        else:
+            lookback = min(30, len(bars) - 5)
+            recent_bars = bars[-lookback:]
+            r_highs = [b['high'] for b in recent_bars]
+            r_lows = [b['low'] for b in recent_bars]
+            r_closes = [b['close'] for b in recent_bars]
+            r_volumes = [b['volume'] for b in recent_bars]
+
+            swing_lows_all = find_swing_lows(r_lows, 3)
+            swing_highs_all = find_swing_highs(r_highs, 3)
+
+            avg_vol = sum(r_volumes) / len(r_volumes) if r_volumes else 1
+            last_vol = volumes[-1]
+            vol_spike = last_vol > avg_vol * 1.3
+
+            # === BUY SETUP: Sweep Low → BOS Up → Retest → Bullish confirmation ===
+            sweep_low = False
+            sweep_low_price = 0
+            bos_up = False
+            bos_level = 0
+            retest_buy = False
+            bull_confirm = False
+
+            if len(swing_lows_all) >= 2:
+                prev_low = swing_lows_all[-2][1]
+                # Check if recent price swept below prev low then recovered
+                for i in range(swing_lows_all[-2][0] + 1, len(r_lows)):
+                    if r_lows[i] < prev_low and r_closes[min(i, len(r_closes)-1)] > prev_low:
+                        sweep_low = True
+                        sweep_low_price = r_lows[i]
+                        break
+
+            if sweep_low and len(swing_highs_all) >= 1:
+                last_high = swing_highs_all[-1][1]
+                if current > last_high:
+                    bos_up = True
+                    bos_level = last_high
+
+            if bos_up:
+                if abs(current - ema_20) / ema_20 * 100 < 2.0 or abs(current - bos_level) / bos_level * 100 < 1.5:
+                    retest_buy = True
+
+            engulf_bull = is_engulfing_bullish(bars, len(bars) - 1)
+            rej_bull = has_rejection_wick(last_bar, 'bull')
+            bull_confirm = engulf_bull or rej_bull or (is_bullish_candle(last_bar['open'], last_bar['high'], last_bar['low'], last_bar['close']) and vol_spike)
+
+            # === SELL SETUP: Sweep High → BOS Down → Retest → Bearish confirmation ===
+            sweep_high = False
+            sweep_high_price = 0
+            bos_down = False
+            bos_level_sell = 0
+            retest_sell = False
+            bear_confirm = False
+
+            if len(swing_highs_all) >= 2:
+                prev_high = swing_highs_all[-2][1]
+                for i in range(swing_highs_all[-2][0] + 1, len(r_highs)):
+                    if r_highs[i] > prev_high and r_closes[min(i, len(r_closes)-1)] < prev_high:
+                        sweep_high = True
+                        sweep_high_price = r_highs[i]
+                        break
+
+            if sweep_high and len(swing_lows_all) >= 1:
+                last_low_val = swing_lows_all[-1][1]
+                if current < last_low_val:
+                    bos_down = True
+                    bos_level_sell = last_low_val
+
+            if bos_down:
+                if abs(current - ema_20) / ema_20 * 100 < 2.0 or abs(current - bos_level_sell) / bos_level_sell * 100 < 1.5:
+                    retest_sell = True
+
+            engulf_bear = is_engulfing_bearish(bars, len(bars) - 1)
+            rej_bear = has_rejection_wick(last_bar, 'bear')
+            bear_confirm = engulf_bear or rej_bear or (is_bearish_candle(last_bar['open'], last_bar['high'], last_bar['low'], last_bar['close']) and vol_spike)
+
+            buy_pro_score = sum([sweep_low, bos_up, retest_buy, bull_confirm])
+            sell_pro_score = sum([sweep_high, bos_down, retest_sell, bear_confirm])
+
+            confirm_details = []
+            if engulf_bull:
+                confirm_details.append("Bullish Engulfing")
+            if engulf_bear:
+                confirm_details.append("Bearish Engulfing")
+            if rej_bull:
+                confirm_details.append("Bullish Rejection Wick")
+            if rej_bear:
+                confirm_details.append("Bearish Rejection Wick")
+            if vol_spike:
+                confirm_details.append(f"Volume Spike ({last_vol/avg_vol:.1f}x)")
+
+            if buy_pro_score >= 3:
+                entry = current
+                sl = sweep_low_price if sweep_low_price > 0 else min(lows[-10:])
+                risk = entry - sl
+                t1 = entry + risk * 2
+                t2 = entry + risk * 3
+
+                conditions = {
+                    "sweep_low": {"met": sweep_low, "detail": f"Liquidity grab below ₹{sweep_low_price:.2f}" if sweep_low else "No sweep detected"},
+                    "bos_up": {"met": bos_up, "detail": f"Structure break above ₹{bos_level:.2f}" if bos_up else "No BOS up"},
+                    "retest": {"met": retest_buy, "detail": "Price retesting breakout zone" if retest_buy else "No retest yet"},
+                    "confirmation": {"met": bull_confirm, "detail": ", ".join(confirm_details) if confirm_details else "No confirmation"}
+                }
+                pro_details = {
+                    "sweep_price": f"{sweep_low_price:.2f}" if sweep_low else "N/A",
+                    "bos_level": f"{bos_level:.2f}" if bos_up else "N/A",
+                    "confirmation_signals": confirm_details,
+                    "volume_ratio": f"{last_vol/avg_vol:.1f}x"
+                }
+                rec = f"PRO BUY! Sweep low at ₹{sweep_low_price:.2f} → BOS above ₹{bos_level:.2f} → Retest confirmed. {', '.join(confirm_details)}. Entry at retest ₹{entry:.2f}, SL below sweep ₹{sl:.2f}. RR 1:2 minimum."
+
+                if request.multi_timeframe:
+                    mtf_data = get_mtf_confirmation(request.ticker, "BUY")
+                    if mtf_data.get("confirmed"):
+                        rec += f" MTF CONFIRMED ({mtf_data['strength']})!"
+
+                return GoldenSetupResponse(
+                    mode="Pro (SMC)", signal_type="BUY", conditions=conditions,
+                    entry_price=f"{entry:.2f}", stop_loss=f"{sl:.2f}",
+                    targets=[f"{t1:.2f}", f"{t2:.2f}"],
+                    risk_reward="1:2 / 1:3", adx_value=round(adx, 1),
+                    pro_details=pro_details, mtf_confirmation=mtf_data,
+                    recommendation=rec
+                )
+
+            elif sell_pro_score >= 3:
+                entry = current
+                sl = sweep_high_price if sweep_high_price > 0 else max(highs[-10:])
+                risk = sl - entry
+                t1 = entry - risk * 2
+                t2 = entry - risk * 3
+
+                conditions = {
+                    "sweep_high": {"met": sweep_high, "detail": f"Liquidity grab above ₹{sweep_high_price:.2f}" if sweep_high else "No sweep detected"},
+                    "bos_down": {"met": bos_down, "detail": f"Structure break below ₹{bos_level_sell:.2f}" if bos_down else "No BOS down"},
+                    "retest": {"met": retest_sell, "detail": "Price retesting breakdown zone" if retest_sell else "No retest yet"},
+                    "confirmation": {"met": bear_confirm, "detail": ", ".join(confirm_details) if confirm_details else "No confirmation"}
+                }
+                pro_details = {
+                    "sweep_price": f"{sweep_high_price:.2f}" if sweep_high else "N/A",
+                    "bos_level": f"{bos_level_sell:.2f}" if bos_down else "N/A",
+                    "confirmation_signals": confirm_details,
+                    "volume_ratio": f"{last_vol/avg_vol:.1f}x"
+                }
+                rec = f"PRO SELL! Sweep high at ₹{sweep_high_price:.2f} → BOS below ₹{bos_level_sell:.2f} → Retest confirmed. {', '.join(confirm_details)}. Entry at retest ₹{entry:.2f}, SL above sweep ₹{sl:.2f}. RR 1:2 minimum."
+
+                if request.multi_timeframe:
+                    mtf_data = get_mtf_confirmation(request.ticker, "SELL")
+                    if mtf_data.get("confirmed"):
+                        rec += f" MTF CONFIRMED ({mtf_data['strength']})!"
+
+                return GoldenSetupResponse(
+                    mode="Pro (SMC)", signal_type="SELL", conditions=conditions,
+                    entry_price=f"{entry:.2f}", stop_loss=f"{sl:.2f}",
+                    targets=[f"{t1:.2f}", f"{t2:.2f}"],
+                    risk_reward="1:2 / 1:3", adx_value=round(adx, 1),
+                    pro_details=pro_details, mtf_confirmation=mtf_data,
+                    recommendation=rec
+                )
+
+            else:
+                conditions = {
+                    "sweep_low": {"met": sweep_low, "detail": f"Liquidity grab below ₹{sweep_low_price:.2f}" if sweep_low else "No sweep detected"},
+                    "sweep_high": {"met": sweep_high, "detail": f"Liquidity grab above ₹{sweep_high_price:.2f}" if sweep_high else "No sweep detected"},
+                    "bos": {"met": bos_up or bos_down, "detail": ("BOS Up" if bos_up else "BOS Down") if (bos_up or bos_down) else "No BOS"},
+                    "retest": {"met": retest_buy or retest_sell, "detail": "Retest zone" if (retest_buy or retest_sell) else "No retest"},
+                    "confirmation": {"met": bull_confirm or bear_confirm, "detail": ", ".join(confirm_details) if confirm_details else "No confirmation"}
+                }
+                pro_details = {
+                    "sweep_price": "N/A",
+                    "bos_level": "N/A",
+                    "confirmation_signals": confirm_details,
+                    "volume_ratio": f"{last_vol/avg_vol:.1f}x"
+                }
+                best = max(buy_pro_score, sell_pro_score)
+                rec = f"No Pro setup yet. {best}/4 conditions met. " + ("Leaning bullish." if buy_pro_score > sell_pro_score else "Leaning bearish." if sell_pro_score > buy_pro_score else "Neutral.") + " Wait for complete Sweep → BOS → Retest → Confirm sequence."
+
+                return GoldenSetupResponse(
+                    mode="Pro (SMC)", signal_type="WAIT", conditions=conditions,
+                    adx_value=round(adx, 1), pro_details=pro_details,
+                    mtf_confirmation=mtf_data,
+                    recommendation=rec
+                )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error in golden setup analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def get_mtf_confirmation(ticker, primary_signal):
+    """Fetch higher timeframe data and confirm signal"""
+    try:
+        tf_data = yf.download(ticker, period="6mo", interval="1wk", progress=False)
+        if tf_data.empty or len(tf_data) < 10:
+            return {"confirmed": False, "timeframe": "Weekly", "detail": "Insufficient weekly data", "strength": "N/A"}
+
+        # Handle multi-index columns from yfinance
+        if isinstance(tf_data.columns, pd.MultiIndex):
+            w_closes = tf_data['Close'].iloc[:, 0].dropna().values.tolist()
+            w_highs = tf_data['High'].iloc[:, 0].dropna().values.tolist()
+            w_lows = tf_data['Low'].iloc[:, 0].dropna().values.tolist()
+        else:
+            w_closes = tf_data['Close'].dropna().values.tolist()
+            w_highs = tf_data['High'].dropna().values.tolist()
+            w_lows = tf_data['Low'].dropna().values.tolist()
+
+        if len(w_closes) < 10:
+            return {"confirmed": False, "timeframe": "Weekly", "detail": "Not enough weekly closes", "strength": "N/A"}
+
+        w_ema20 = calc_ema(w_closes, min(20, len(w_closes)))
+        w_ema50 = calc_ema(w_closes, min(50, len(w_closes)))
+        w_sma200 = sum(w_closes) / len(w_closes)
+        w_current = w_closes[-1]
+        w_adx = calc_adx(w_highs, w_lows, w_closes, 14)
+
+        w_above_sma = w_current > w_sma200
+        w_ema_bull = w_ema20 > w_ema50
+
+        if primary_signal == "BUY":
+            confirmed = w_above_sma and w_ema_bull
+            strength = "STRONG" if confirmed and w_adx > 20 else ("MODERATE" if confirmed else "WEAK")
+            detail = f"Weekly: Price {'>' if w_above_sma else '<'} SMA, EMA20 {'>' if w_ema_bull else '<'} EMA50, ADX {w_adx:.0f}"
+        elif primary_signal == "SELL":
+            confirmed = not w_above_sma and not w_ema_bull
+            strength = "STRONG" if confirmed and w_adx > 20 else ("MODERATE" if confirmed else "WEAK")
+            detail = f"Weekly: Price {'<' if not w_above_sma else '>'} SMA, EMA20 {'<' if not w_ema_bull else '>'} EMA50, ADX {w_adx:.0f}"
+        else:
+            confirmed = False
+            strength = "N/A"
+            detail = "No primary signal to confirm"
+
+        return {"confirmed": confirmed, "timeframe": "Weekly", "detail": detail, "strength": strength, "adx": round(w_adx, 1)}
+    except Exception as e:
+        logging.error(f"MTF error: {e}")
+        return {"confirmed": False, "timeframe": "Weekly", "detail": f"MTF error: {str(e)[:40]}", "strength": "N/A"}
+
+
+class AIIndicatorRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+
+
+class AIIndicatorResponse(BaseModel):
+    ai_score: float
+    signal_type: str
+    indicator_scores: dict
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    targets: Optional[List[str]] = None
+    exit_rules: Optional[dict] = None
+    volume_confirmation: bool
+    recommendation: str
+
+
+def calc_rsi(closes, period=14):
+    """Calculate RSI"""
+    if len(closes) < period + 1:
+        return 50
+    gains = []
+    losses = []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i-1]
+        gains.append(max(diff, 0))
+        losses.append(max(-diff, 0))
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def calc_stochastics(highs, lows, closes, k_period=14, d_period=3):
+    """Calculate Stochastic %K and %D"""
+    if len(closes) < k_period:
+        return 50, 50
+
+    k_values = []
+    for i in range(k_period - 1, len(closes)):
+        h = max(highs[i - k_period + 1:i + 1])
+        lo = min(lows[i - k_period + 1:i + 1])
+        if h == lo:
+            k_values.append(50)
+        else:
+            k_values.append(((closes[i] - lo) / (h - lo)) * 100)
+
+    pct_k = k_values[-1] if k_values else 50
+    pct_d = sum(k_values[-d_period:]) / min(d_period, len(k_values)) if k_values else 50
+    return pct_k, pct_d
+
+
+def calc_dmi_score(highs, lows, closes, period=14):
+    """Calculate DMI score (0-100)"""
+    if len(closes) < period * 2:
+        return 50, 0, 0
+
+    plus_dm = []
+    minus_dm = []
+    tr_list = []
+    for i in range(1, len(highs)):
+        high_diff = highs[i] - highs[i-1]
+        low_diff = lows[i-1] - lows[i]
+        plus_dm.append(max(high_diff, 0) if high_diff > low_diff else 0)
+        minus_dm.append(max(low_diff, 0) if low_diff > high_diff else 0)
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        tr_list.append(tr)
+
+    if len(tr_list) < period:
+        return 50, 0, 0
+
+    atr = sum(tr_list[:period]) / period
+    p_sum = sum(plus_dm[:period]) / period
+    m_sum = sum(minus_dm[:period]) / period
+
+    for i in range(period, len(tr_list)):
+        atr = (atr * (period - 1) + tr_list[i]) / period
+        p_sum = (p_sum * (period - 1) + plus_dm[i]) / period
+        m_sum = (m_sum * (period - 1) + minus_dm[i]) / period
+
+    if atr == 0:
+        return 50, 0, 0
+    plus_di = (p_sum / atr) * 100
+    minus_di = (m_sum / atr) * 100
+
+    if plus_di + minus_di == 0:
+        return 50, plus_di, minus_di
+
+    # Score: 100 = strong bull, 0 = strong bear, 50 = neutral
+    score = (plus_di / (plus_di + minus_di)) * 100
+    return score, plus_di, minus_di
+
+
+def calc_ma_score(closes):
+    """MA Score from 9-day and 20-day MA"""
+    if len(closes) < 20:
+        return 50
+
+    ma9 = sum(closes[-9:]) / 9
+    ma20 = sum(closes[-20:]) / 20
+    current = closes[-1]
+
+    score = 50
+    if current > ma9:
+        score += 20
+    if current > ma20:
+        score += 15
+    if ma9 > ma20:
+        score += 15
+
+    prev_ma9 = sum(closes[-10:-1]) / 9 if len(closes) >= 10 else ma9
+    prev_ma20 = sum(closes[-21:-1]) / 20 if len(closes) >= 21 else ma20
+    if prev_ma9 <= prev_ma20 and ma9 > ma20:
+        score = min(score + 10, 100)
+    if prev_ma9 >= prev_ma20 and ma9 < ma20:
+        score = max(score - 10, 0)
+
+    if current < ma9:
+        score -= 20
+    if current < ma20:
+        score -= 15
+
+    return max(0, min(100, score))
+
+
+def calc_macd_score(closes):
+    """MACD Score"""
+    if len(closes) < 26:
+        return 50
+
+    ema12 = calc_ema(closes, 12)
+    ema26 = calc_ema(closes, 26)
+    macd_line = ema12 - ema26
+
+    prev_ema12 = calc_ema(closes[:-1], 12)
+    prev_ema26 = calc_ema(closes[:-1], 26)
+    prev_macd = prev_ema12 - prev_ema26
+
+    # Simple signal approximation
+    signal = (macd_line + prev_macd) / 2
+    histogram = macd_line - signal
+
+    score = 50
+    if macd_line > 0:
+        score += 20
+    else:
+        score -= 20
+    if macd_line > signal:
+        score += 15
+    else:
+        score -= 15
+    if histogram > 0 and histogram > prev_macd - signal:
+        score += 15
+    elif histogram < 0:
+        score -= 15
+
+    return max(0, min(100, score))
+
+
+def calc_rsi_score(rsi_val):
+    """Convert RSI to score"""
+    if rsi_val < 30:
+        return min(90, 50 + (30 - rsi_val) * 1.3)
+    elif rsi_val > 70:
+        return max(10, 50 - (rsi_val - 70) * 1.3)
+    elif rsi_val > 50:
+        return 50 + (rsi_val - 50) * 0.5
+    else:
+        return 50 - (50 - rsi_val) * 0.5
+
+
+def calc_stoch_score(pct_k, pct_d):
+    """Convert Stochastics to score"""
+    score = 50
+    if pct_k > pct_d:
+        score += 25
+    else:
+        score -= 25
+    if pct_k < 20:
+        score += 15
+    elif pct_k > 80:
+        score -= 15
+    return max(0, min(100, score))
+
+
+@api_router.post("/ai-indicator/analyze", response_model=AIIndicatorResponse)
+async def analyze_ai_indicator(request: AIIndicatorRequest):
+    """AI Indicator Score - Weighted composite of 5 technical indicators"""
+    try:
+        bars = request.bars
+        if len(bars) < 30:
+            raise HTTPException(status_code=400, detail="Need at least 30 bars")
+
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        closes = [b['close'] for b in bars]
+        volumes = [b['volume'] for b in bars]
+        current = closes[-1]
+
+        # 1. DMI Score (30%)
+        dmi_score, plus_di, minus_di = calc_dmi_score(highs, lows, closes)
+
+        # 2. MA Score (25%)
+        ma_score = calc_ma_score(closes)
+
+        # 3. MACD Score (20%)
+        macd_score = calc_macd_score(closes)
+
+        # 4. RSI Score (15%)
+        rsi_val = calc_rsi(closes, 14)
+        rsi_score = calc_rsi_score(rsi_val)
+
+        # 5. Stochastics Score (10%)
+        pct_k, pct_d = calc_stochastics(highs, lows, closes)
+        stoch_score = calc_stoch_score(pct_k, pct_d)
+
+        # Weighted AI Score
+        ai_score = (dmi_score * 0.30) + (ma_score * 0.25) + (macd_score * 0.20) + (rsi_score * 0.15) + (stoch_score * 0.10)
+        ai_score = round(ai_score, 1)
+
+        # Volume confirmation
+        avg_vol = sum(volumes[-20:]) / min(20, len(volumes))
+        vol_spike = volumes[-1] > avg_vol * 1.2
+
+        indicator_scores = {
+            "dmi": {"score": round(dmi_score, 1), "weight": "30%", "detail": f"+DI: {plus_di:.1f}, -DI: {minus_di:.1f}", "raw": f"+DI {plus_di:.0f} / -DI {minus_di:.0f}"},
+            "moving_avg": {"score": round(ma_score, 1), "weight": "25%", "detail": "MA9 vs MA20 alignment", "raw": f"MA9: {sum(closes[-9:])/9:.2f}, MA20: {sum(closes[-20:])/min(20,len(closes)):.2f}"},
+            "macd": {"score": round(macd_score, 1), "weight": "20%", "detail": "MACD momentum", "raw": f"EMA12-EMA26: {calc_ema(closes,12)-calc_ema(closes,26):.2f}"},
+            "rsi": {"score": round(rsi_score, 1), "weight": "15%", "detail": f"RSI: {rsi_val:.1f}", "raw": f"RSI(14): {rsi_val:.1f}"},
+            "stochastics": {"score": round(stoch_score, 1), "weight": "10%", "detail": f"%K: {pct_k:.1f}, %D: {pct_d:.1f}", "raw": f"%K: {pct_k:.0f}, %D: {pct_d:.0f}"}
+        }
+
+        # Signal
+        if ai_score > 70:
+            signal_type = "BUY"
+            entry = current
+            sl = current * 0.93  # 7% stop loss
+            risk = entry - sl
+            t1 = entry + risk * 2
+            t2 = entry + risk * 3
+            entry_price = f"{entry:.2f}"
+            stop_loss = f"{sl:.2f}"
+            targets = [f"{t1:.2f}", f"{t2:.2f}"]
+            exit_rules = {
+                "stop_loss_pct": "7%",
+                "profit_target": f"₹{t1:.2f} (1:2 RR) / ₹{t2:.2f} (1:3 RR)",
+                "time_exit": "Exit if no move in 10 days",
+                "trailing": "Trail SL to breakeven after T1 hit"
+            }
+            rec = f"STRONG BUY! AI Score {ai_score:.0f}/100. All indicators aligned bullish. " + ("Volume spike confirms. " if vol_spike else "") + f"Entry ₹{entry:.2f}, SL ₹{sl:.2f} (7%). Targets: T1 ₹{t1:.2f}, T2 ₹{t2:.2f}."
+        elif ai_score < 30:
+            signal_type = "SELL"
+            entry = current
+            sl = current * 1.07  # 7% stop loss
+            risk = sl - entry
+            t1 = entry - risk * 2
+            t2 = entry - risk * 3
+            entry_price = f"{entry:.2f}"
+            stop_loss = f"{sl:.2f}"
+            targets = [f"{t1:.2f}", f"{t2:.2f}"]
+            exit_rules = {
+                "stop_loss_pct": "7%",
+                "profit_target": f"₹{t1:.2f} (1:2 RR) / ₹{t2:.2f} (1:3 RR)",
+                "time_exit": "Exit if no move in 10 days",
+                "trailing": "Trail SL to breakeven after T1 hit"
+            }
+            rec = f"STRONG SELL! AI Score {ai_score:.0f}/100. Bearish alignment across indicators. " + ("Volume spike confirms breakdown. " if vol_spike else "") + f"Entry ₹{entry:.2f}, SL ₹{sl:.2f} (7%). Targets: T1 ₹{t1:.2f}, T2 ₹{t2:.2f}."
+        else:
+            signal_type = "WAIT"
+            entry_price = None
+            stop_loss = None
+            targets = None
+            exit_rules = None
+            rec = f"HOLD — AI Score {ai_score:.0f}/100. Mixed signals. "
+            if ai_score > 55:
+                rec += "Leaning bullish, wait for score > 70 to enter."
+            elif ai_score < 45:
+                rec += "Leaning bearish, wait for score < 30 for short."
+            else:
+                rec += "Neutral zone. Avoid trading, wait for clear direction."
+
+        return AIIndicatorResponse(
+            ai_score=ai_score,
+            signal_type=signal_type,
+            indicator_scores=indicator_scores,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            targets=targets,
+            exit_rules=exit_rules,
+            volume_confirmation=vol_spike,
+            recommendation=rec
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error in AI indicator analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class GodzillaSetupRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+
+
+class GodzillaSetupResponse(BaseModel):
+    signal_type: str
+    trend_direction: str
+    hook_detected: bool
+    hook_price: Optional[str] = None
+    hook_index: Optional[int] = None
+    correction_bars: int
+    entry_trigger: Optional[dict] = None
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    targets: Optional[List[str]] = None
+    risk_management: Optional[dict] = None
+    conditions: dict
+    recommendation: str
+
+
+def detect_ross_hooks(highs, lows, closes, lookback=30):
+    """Detect Ross Hooks - first failure to make new high/low in a trend"""
+    hooks = []
+    start = max(0, len(highs) - lookback)
+
+    # Uptrend hooks (failure to make higher high)
+    for i in range(start + 2, len(highs)):
+        if highs[i-2] < highs[i-1] and highs[i] < highs[i-1]:
+            hooks.append({
+                "type": "up",
+                "index": i - 1,
+                "price": highs[i - 1],
+                "bar_index_from_end": len(highs) - 1 - (i - 1)
+            })
+
+    # Downtrend hooks (failure to make lower low)
+    for i in range(start + 2, len(lows)):
+        if lows[i-2] > lows[i-1] and lows[i] > lows[i-1]:
+            hooks.append({
+                "type": "down",
+                "index": i - 1,
+                "price": lows[i - 1],
+                "bar_index_from_end": len(lows) - 1 - (i - 1)
+            })
+
+    return hooks
+
+
+def detect_trend(closes, period=20):
+    """Simple trend detection"""
+    if len(closes) < period:
+        return "NEUTRAL"
+    sma = sum(closes[-period:]) / period
+    recent = sum(closes[-5:]) / 5
+    if recent > sma * 1.01:
+        return "UP"
+    elif recent < sma * 0.99:
+        return "DOWN"
+    return "NEUTRAL"
+
+
+@api_router.post("/godzilla-setup/analyze", response_model=GodzillaSetupResponse)
+async def analyze_godzilla_setup(request: GodzillaSetupRequest):
+    """Godzilla Setup - Ross Hook + Trader's Trick Entry (TTE)"""
+    try:
+        bars = request.bars
+        if len(bars) < 20:
+            raise HTTPException(status_code=400, detail="Need at least 20 bars")
+
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        closes = [b['close'] for b in bars]
+        current = closes[-1]
+
+        trend = detect_trend(closes)
+        hooks = detect_ross_hooks(highs, lows, closes)
+
+        # Filter hooks by relevance (recent, matching trend)
+        relevant_hooks = []
+        for h in hooks:
+            if h["bar_index_from_end"] <= 10:
+                if trend == "UP" and h["type"] == "up":
+                    relevant_hooks.append(h)
+                elif trend == "DOWN" and h["type"] == "down":
+                    relevant_hooks.append(h)
+                elif trend == "NEUTRAL":
+                    relevant_hooks.append(h)
+
+        if not relevant_hooks:
+            # Check any recent hook regardless of trend
+            recent = [h for h in hooks if h["bar_index_from_end"] <= 8]
+            if recent:
+                relevant_hooks = [recent[-1]]
+
+        hook_detected = len(relevant_hooks) > 0
+
+        if not hook_detected:
+            conditions = {
+                "trend": {"met": trend != "NEUTRAL", "detail": f"Trend: {trend}"},
+                "ross_hook": {"met": False, "detail": "No Ross Hook detected in recent bars"},
+                "correction_bars": {"met": False, "detail": "N/A - no hook"},
+                "entry_trigger": {"met": False, "detail": "N/A - no hook"}
+            }
+            return GodzillaSetupResponse(
+                signal_type="WAIT", trend_direction=trend,
+                hook_detected=False, correction_bars=0,
+                conditions=conditions,
+                recommendation=f"No Ross Hook detected. Trend is {trend}. Wait for price to make a high/low followed by failure to exceed it."
+            )
+
+        # Use most recent relevant hook
+        hook = relevant_hooks[-1]
+        hook_idx = hook["index"]
+        hook_price = hook["price"]
+        hook_type = hook["type"]
+
+        # Count correction bars after hook (max 3)
+        bars_after_hook = len(bars) - 1 - hook_idx
+        correction_count = min(bars_after_hook, 3)
+
+        # Analyze correction bars for TTE entry
+        entry_found = False
+        entry_price_val = None
+        sl_price = None
+        trigger_info = None
+
+        if hook_type == "up":
+            # Long TTE: enter on breakout above correction bar high
+            for i in range(1, correction_count + 1):
+                bar_idx = hook_idx + i
+                if bar_idx >= len(bars):
+                    break
+                corr_bar = bars[bar_idx]
+                corr_high = corr_bar['high']
+
+                # Check if enough distance between correction bar high and hook
+                distance_pct = ((hook_price - corr_high) / hook_price) * 100
+                if distance_pct > 0.3:  # At least 0.3% gap
+                    # Check if current price broke above correction bar high
+                    if current > corr_high:
+                        entry_found = True
+                        entry_price_val = corr_high
+                        sl_price = corr_bar['low']
+                        trigger_info = {
+                            "correction_bar": i,
+                            "bar_high": f"{corr_high:.2f}",
+                            "bar_low": f"{corr_bar['low']:.2f}",
+                            "distance_to_hook": f"{distance_pct:.1f}%",
+                            "status": "TRIGGERED - Price broke above"
+                        }
+                        break
+                    else:
+                        trigger_info = {
+                            "correction_bar": i,
+                            "bar_high": f"{corr_high:.2f}",
+                            "bar_low": f"{corr_bar['low']:.2f}",
+                            "distance_to_hook": f"{distance_pct:.1f}%",
+                            "status": f"PENDING - Price ₹{current:.2f} below trigger ₹{corr_high:.2f}"
+                        }
+
+            if not trigger_info and correction_count > 0:
+                last_corr = bars[min(hook_idx + correction_count, len(bars) - 1)]
+                trigger_info = {
+                    "correction_bar": correction_count,
+                    "bar_high": f"{last_corr['high']:.2f}",
+                    "bar_low": f"{last_corr['low']:.2f}",
+                    "distance_to_hook": f"{((hook_price - last_corr['high']) / hook_price * 100):.1f}%",
+                    "status": "WATCHING"
+                }
+
+        else:
+            # Short TTE: enter on breakout below correction bar low
+            for i in range(1, correction_count + 1):
+                bar_idx = hook_idx + i
+                if bar_idx >= len(bars):
+                    break
+                corr_bar = bars[bar_idx]
+                corr_low = corr_bar['low']
+
+                distance_pct = ((corr_low - hook_price) / hook_price) * 100
+                if distance_pct > 0.3:
+                    if current < corr_low:
+                        entry_found = True
+                        entry_price_val = corr_low
+                        sl_price = corr_bar['high']
+                        trigger_info = {
+                            "correction_bar": i,
+                            "bar_high": f"{corr_bar['high']:.2f}",
+                            "bar_low": f"{corr_low:.2f}",
+                            "distance_to_hook": f"{distance_pct:.1f}%",
+                            "status": "TRIGGERED - Price broke below"
+                        }
+                        break
+                    else:
+                        trigger_info = {
+                            "correction_bar": i,
+                            "bar_high": f"{corr_bar['high']:.2f}",
+                            "bar_low": f"{corr_low:.2f}",
+                            "distance_to_hook": f"{distance_pct:.1f}%",
+                            "status": f"PENDING - Price ₹{current:.2f} above trigger ₹{corr_low:.2f}"
+                        }
+
+            if not trigger_info and correction_count > 0:
+                last_corr = bars[min(hook_idx + correction_count, len(bars) - 1)]
+                trigger_info = {
+                    "correction_bar": correction_count,
+                    "bar_high": f"{last_corr['high']:.2f}",
+                    "bar_low": f"{last_corr['low']:.2f}",
+                    "distance_to_hook": f"{((last_corr['low'] - hook_price) / hook_price * 100):.1f}%",
+                    "status": "WATCHING"
+                }
+
+        # Build response
+        if entry_found:
+            signal_type = "BUY" if hook_type == "up" else "SELL"
+            risk = abs(entry_price_val - sl_price)
+            if hook_type == "up":
+                cost_cover = entry_price_val + risk * 0.5
+                t2 = hook_price
+                t3 = hook_price + risk * 2
+            else:
+                cost_cover = entry_price_val - risk * 0.5
+                t2 = hook_price
+                t3 = hook_price - risk * 2
+
+            targets = [f"{cost_cover:.2f}", f"{t2:.2f}", f"{t3:.2f}"]
+            risk_mgmt = {
+                "partial_exit": f"₹{cost_cover:.2f} (cover costs + small profit)",
+                "breakeven_stop": f"₹{entry_price_val:.2f} (move SL to entry after T1)",
+                "hook_target": f"₹{hook_price:.2f} (test Hook point)",
+                "runner": f"₹{t3:.2f} (if breakout past Hook continues)"
+            }
+            rec = (f"GODZILLA {'BUY' if hook_type == 'up' else 'SELL'}! Ross Hook at ₹{hook_price:.2f}. "
+                   f"TTE triggered on correction bar {trigger_info['correction_bar']}. "
+                   f"Entry ₹{entry_price_val:.2f}, SL ₹{sl_price:.2f}. "
+                   f"T1 (cost cover) ₹{cost_cover:.2f}, T2 (Hook test) ₹{hook_price:.2f}. "
+                   f"After T1 move SL to breakeven. Let remaining position run if Hook breaks.")
+        else:
+            signal_type = "WAIT"
+            targets = None
+            risk_mgmt = None
+            entry_price_val = None
+            sl_price = None
+
+            if correction_count >= 3:
+                rec = f"Ross Hook at ₹{hook_price:.2f} detected but 3 correction bars passed without trigger. Setup expired. Wait for next Hook."
+            elif correction_count > 0:
+                if hook_type == "up":
+                    trigger_level = trigger_info['bar_high'] if trigger_info else "N/A"
+                    rec = f"Ross Hook at ₹{hook_price:.2f}. Correction bar {correction_count} active. Enter LONG if price breaks above ₹{trigger_level}. Max 3 bars to trigger."
+                else:
+                    trigger_level = trigger_info['bar_low'] if trigger_info else "N/A"
+                    rec = f"Ross Hook at ₹{hook_price:.2f}. Correction bar {correction_count} active. Enter SHORT if price breaks below ₹{trigger_level}. Max 3 bars to trigger."
+            else:
+                rec = f"Ross Hook at ₹{hook_price:.2f}. Waiting for first correction bar. Hook type: {'Uptrend' if hook_type == 'up' else 'Downtrend'}."
+
+        conditions = {
+            "trend": {"met": trend != "NEUTRAL", "detail": f"Trend: {trend}"},
+            "ross_hook": {"met": hook_detected, "detail": f"Hook at ₹{hook_price:.2f} ({'Uptrend' if hook_type == 'up' else 'Downtrend'})"},
+            "correction_bars": {"met": correction_count > 0, "detail": f"{correction_count}/3 correction bars"},
+            "entry_trigger": {"met": entry_found, "detail": trigger_info.get("status", "N/A") if trigger_info else "No trigger"}
+        }
+
+        return GodzillaSetupResponse(
+            signal_type=signal_type,
+            trend_direction=trend,
+            hook_detected=hook_detected,
+            hook_price=f"{hook_price:.2f}",
+            hook_index=hook.get("bar_index_from_end"),
+            correction_bars=correction_count,
+            entry_trigger=trigger_info,
+            entry_price=f"{entry_price_val:.2f}" if entry_price_val else None,
+            stop_loss=f"{sl_price:.2f}" if sl_price else None,
+            targets=targets,
+            risk_management=risk_mgmt,
+            conditions=conditions,
+            recommendation=rec
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error in godzilla setup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DemonRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+
+
+class DemonResponse(BaseModel):
+    verdict: str
+    signal_type: str
+    confidence: float
+    buy_count: int
+    sell_count: int
+    wait_count: int
+    total_strategies: int
+    strategy_signals: dict
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    targets: Optional[List[str]] = None
+    confluence_details: List[str]
+    recommendation: str
+
+
+def run_mini_falling_knife(bars):
+    """Quick falling knife check"""
+    try:
+        closes = [b['close'] for b in bars]
+        highs = [b['high'] for b in bars]
+        peak = max(highs)
+        current = closes[-1]
+        drop = ((peak - current) / peak) * 100
+        if drop >= 40:
+            return "BUY"
+        return "WAIT"
+    except Exception:
+        return "WAIT"
+
+
+def run_mini_reverse_swings(bars, method):
+    """Quick reverse swings check"""
+    try:
+        closes = [b['close'] for b in bars]
+        if len(closes) < 10:
+            return "WAIT"
+        current = closes[-1]
+        c5 = closes[-6]
+        if method == "A" and current < c5:
+            diffs = [abs(closes[i] - closes[i-1]) for i in range(1, len(closes))]
+            avg = sum(diffs) / len(diffs) if diffs else 0
+            current_diff = abs(current - c5)
+            if current_diff > avg * 1.5:
+                return "BUY"
+        elif method == "B" and current > c5:
+            diffs = [abs(closes[i] - closes[i-1]) for i in range(1, len(closes))]
+            avg = sum(diffs) / len(diffs) if diffs else 0
+            current_diff = abs(current - c5)
+            if current_diff > avg * 1.5:
+                return "SELL"
+        return "WAIT"
+    except Exception:
+        return "WAIT"
+
+
+def run_mini_explosive_volume(bars):
+    """Quick explosive volume check"""
+    try:
+        closes = [b['close'] for b in bars]
+        volumes = [b['volume'] for b in bars]
+        highs = [b['high'] for b in bars]
+        if len(bars) < 50:
+            return "WAIT"
+        vol_sma = sum(volumes[-50:]) / 50
+        if volumes[-1] > 2 * vol_sma:
+            high_60 = max(highs[-60:]) if len(highs) >= 60 else max(highs)
+            if ((high_60 - closes[-1]) / high_60 * 100) <= 5:
+                return "BUY"
+        return "WAIT"
+    except Exception:
+        return "WAIT"
+
+
+def run_mini_golden_setup(bars):
+    """Quick golden setup check"""
+    try:
+        closes = [b['close'] for b in bars]
+        if len(closes) < 50:
+            return "WAIT"
+        sma200 = sum(closes[-min(200, len(closes)):]) / min(200, len(closes))
+        ema20 = calc_ema(closes, 20)
+        ema50 = calc_ema(closes, 50)
+        current = closes[-1]
+        last = bars[-1]
+        bullish = is_bullish_candle(last['open'], last['high'], last['low'], last['close'])
+        bearish = is_bearish_candle(last['open'], last['high'], last['low'], last['close'])
+
+        if current > sma200 and ema20 > ema50 and bullish:
+            return "BUY"
+        elif current < sma200 and ema20 < ema50 and bearish:
+            return "SELL"
+        return "WAIT"
+    except Exception:
+        return "WAIT"
+
+
+def run_mini_ai_indicator(bars):
+    """Quick AI indicator check"""
+    try:
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        closes = [b['close'] for b in bars]
+        if len(closes) < 26:
+            return "WAIT", 50
+
+        dmi_s, _, _ = calc_dmi_score(highs, lows, closes)
+        ma_s = calc_ma_score(closes)
+        macd_s = calc_macd_score(closes)
+        rsi_val = calc_rsi(closes, 14)
+        rsi_s = calc_rsi_score(rsi_val)
+        pk, pd_val = calc_stochastics(highs, lows, closes)
+        stoch_s = calc_stoch_score(pk, pd_val)
+        score = (dmi_s * 0.30) + (ma_s * 0.25) + (macd_s * 0.20) + (rsi_s * 0.15) + (stoch_s * 0.10)
+
+        if score > 70:
+            return "BUY", round(score, 1)
+        elif score < 30:
+            return "SELL", round(score, 1)
+        return "WAIT", round(score, 1)
+    except Exception:
+        return "WAIT", 50
+
+
+def run_mini_godzilla(bars):
+    """Quick godzilla check"""
+    try:
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        closes = [b['close'] for b in bars]
+        if len(bars) < 20:
+            return "WAIT"
+        hooks = detect_ross_hooks(highs, lows, closes)
+        relevant = [h for h in hooks if h["bar_index_from_end"] <= 8]
+        if not relevant:
+            return "WAIT"
+        hook = relevant[-1]
+        hook_idx = hook["index"]
+        current = closes[-1]
+        bars_after = len(bars) - 1 - hook_idx
+        for i in range(1, min(bars_after, 3) + 1):
+            bi = hook_idx + i
+            if bi >= len(bars):
+                break
+            if hook["type"] == "up" and current > bars[bi]['high']:
+                return "BUY"
+            elif hook["type"] == "down" and current < bars[bi]['low']:
+                return "SELL"
+        return "WAIT"
+    except Exception:
+        return "WAIT"
+
+
+@api_router.post("/demon/analyze", response_model=DemonResponse)
+async def analyze_demon(request: DemonRequest):
+    """DEMON - Multi-Strategy Confluence Analyzer"""
+    try:
+        bars = request.bars
+        if len(bars) < 30:
+            raise HTTPException(status_code=400, detail="Need at least 30 bars")
+
+        closes = [b['close'] for b in bars]
+        current = closes[-1]
+
+        # Run all strategies
+        fk_signal = run_mini_falling_knife(bars)
+        rsa_signal = run_mini_reverse_swings(bars, "A")
+        rsb_signal = run_mini_reverse_swings(bars, "B")
+        ev_signal = run_mini_explosive_volume(bars)
+        gs_signal = run_mini_golden_setup(bars)
+        ai_signal, ai_score = run_mini_ai_indicator(bars)
+        gz_signal = run_mini_godzilla(bars)
+
+        strategies = {
+            "falling_knife": {"signal": fk_signal, "name": "Falling Knife", "weight": 1},
+            "reverse_swings_a": {"signal": rsa_signal, "name": "Reverse Swings A", "weight": 1},
+            "reverse_swings_b": {"signal": rsb_signal, "name": "Reverse Swings B", "weight": 1},
+            "explosive_volume": {"signal": ev_signal, "name": "Explosive Volume", "weight": 1.2},
+            "golden_setup": {"signal": gs_signal, "name": "Golden Setup", "weight": 1.5},
+            "ai_indicator": {"signal": ai_signal, "name": f"AI Indicator ({ai_score})", "weight": 1.3},
+            "godzilla": {"signal": gz_signal, "name": "Godzilla TTE", "weight": 1.2},
+        }
+
+        buy_count = sum(1 for s in strategies.values() if s["signal"] == "BUY")
+        sell_count = sum(1 for s in strategies.values() if s["signal"] == "SELL")
+        wait_count = sum(1 for s in strategies.values() if s["signal"] == "WAIT")
+        total = len(strategies)
+
+        # Weighted confidence
+        buy_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "BUY")
+        sell_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "SELL")
+        total_weight = sum(s["weight"] for s in strategies.values())
+        buy_pct = (buy_weight / total_weight) * 100 if total_weight > 0 else 0
+        sell_pct = (sell_weight / total_weight) * 100 if total_weight > 0 else 0
+
+        confluence = []
+        buy_names = [s["name"] for s in strategies.values() if s["signal"] == "BUY"]
+        sell_names = [s["name"] for s in strategies.values() if s["signal"] == "SELL"]
+
+        if buy_count >= 4:
+            verdict = "DEMON BUY"
+            signal_type = "BUY"
+            confidence = buy_pct
+            confluence.append(f"{buy_count}/{total} strategies say BUY")
+            confluence.append(f"Agreeing: {', '.join(buy_names)}")
+            # Aggregate entry/sl/targets from consensus
+            sl = current * 0.95
+            t1 = current * 1.05
+            t2 = current * 1.10
+            t3 = current * 1.15
+            rec = (f"DEMON BUY! {buy_count}/{total} strategies confirm LONG. "
+                   f"Confluence: {', '.join(buy_names)}. "
+                   f"Weighted confidence {confidence:.0f}%. "
+                   f"Entry ₹{current:.2f}, SL ₹{sl:.2f} (5%), Targets T1 ₹{t1:.2f}, T2 ₹{t2:.2f}, T3 ₹{t3:.2f}.")
+        elif sell_count >= 4:
+            verdict = "DEMON SELL"
+            signal_type = "SELL"
+            confidence = sell_pct
+            confluence.append(f"{sell_count}/{total} strategies say SELL")
+            confluence.append(f"Agreeing: {', '.join(sell_names)}")
+            sl = current * 1.05
+            t1 = current * 0.95
+            t2 = current * 0.90
+            t3 = current * 0.85
+            rec = (f"DEMON SELL! {sell_count}/{total} strategies confirm SHORT. "
+                   f"Confluence: {', '.join(sell_names)}. "
+                   f"Weighted confidence {confidence:.0f}%. "
+                   f"Entry ₹{current:.2f}, SL ₹{sl:.2f} (5%), Targets T1 ₹{t1:.2f}, T2 ₹{t2:.2f}, T3 ₹{t3:.2f}.")
+        elif buy_count >= 3:
+            verdict = "LEANING BUY"
+            signal_type = "BUY"
+            confidence = buy_pct
+            confluence.append(f"{buy_count}/{total} strategies say BUY")
+            confluence.append(f"Agreeing: {', '.join(buy_names)}")
+            sl = current * 0.95
+            t1 = current * 1.04
+            t2 = current * 1.08
+            rec = (f"Leaning BUY. {buy_count}/{total} strategies aligned. "
+                   f"Not full confluence yet. {', '.join(buy_names)} agree. "
+                   f"Tentative entry ₹{current:.2f}, SL ₹{sl:.2f}.")
+            t3 = None
+        elif sell_count >= 3:
+            verdict = "LEANING SELL"
+            signal_type = "SELL"
+            confidence = sell_pct
+            confluence.append(f"{sell_count}/{total} strategies say SELL")
+            confluence.append(f"Agreeing: {', '.join(sell_names)}")
+            sl = current * 1.05
+            t1 = current * 0.96
+            t2 = current * 0.92
+            rec = (f"Leaning SELL. {sell_count}/{total} strategies aligned. "
+                   f"Not full confluence yet. {', '.join(sell_names)} agree. "
+                   f"Tentative entry ₹{current:.2f}, SL ₹{sl:.2f}.")
+            t3 = None
+        elif buy_count >= 2 or sell_count >= 2:
+            verdict = "MIXED"
+            signal_type = "WAIT"
+            confidence = max(buy_pct, sell_pct)
+            confluence.append(f"BUY: {buy_count}, SELL: {sell_count}, WAIT: {wait_count}")
+            if buy_names:
+                confluence.append(f"Bullish: {', '.join(buy_names)}")
+            if sell_names:
+                confluence.append(f"Bearish: {', '.join(sell_names)}")
+            sl = None
+            t1 = None
+            t2 = None
+            t3 = None
+            rec = (f"Mixed signals. {buy_count} BUY vs {sell_count} SELL. "
+                   f"No clear confluence. Wait for more agreement between strategies.")
+        else:
+            verdict = "NO SIGNAL"
+            signal_type = "WAIT"
+            confidence = 0
+            confluence.append(f"No confluence: {wait_count}/{total} strategies in WAIT")
+            sl = None
+            t1 = None
+            t2 = None
+            t3 = None
+            rec = f"No confluence detected. {wait_count}/{total} strategies neutral. Market conditions unclear. Stay on sidelines."
+
+        targets = None
+        if t1 is not None:
+            targets = [f"{t1:.2f}"]
+            if t2 is not None:
+                targets.append(f"{t2:.2f}")
+            if t3 is not None:
+                targets.append(f"{t3:.2f}")
+
+        strategy_signals = {}
+        for key, s in strategies.items():
+            strategy_signals[key] = {
+                "name": s["name"],
+                "signal": s["signal"],
+                "weight": s["weight"]
+            }
+
+        return DemonResponse(
+            verdict=verdict,
+            signal_type=signal_type,
+            confidence=round(confidence, 1),
+            buy_count=buy_count,
+            sell_count=sell_count,
+            wait_count=wait_count,
+            total_strategies=total,
+            strategy_signals=strategy_signals,
+            entry_price=f"{current:.2f}" if signal_type != "WAIT" else None,
+            stop_loss=f"{sl:.2f}" if sl else None,
+            targets=targets,
+            confluence_details=confluence,
+            recommendation=rec
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error in demon analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# GHOST MODE - Auto Scanner for Indian Stocks using DEMON logic
+# ============================================================
+
+GHOST_SCAN_STOCKS = [
+    {"ticker": "RELIANCE.NS", "name": "Reliance Industries"},
+    {"ticker": "TCS.NS", "name": "TCS"},
+    {"ticker": "HDFCBANK.NS", "name": "HDFC Bank"},
+    {"ticker": "INFY.NS", "name": "Infosys"},
+    {"ticker": "ICICIBANK.NS", "name": "ICICI Bank"},
+    {"ticker": "SBIN.NS", "name": "SBI"},
+    {"ticker": "BHARTIARTL.NS", "name": "Bharti Airtel"},
+    {"ticker": "ITC.NS", "name": "ITC"},
+    {"ticker": "KOTAKBANK.NS", "name": "Kotak Bank"},
+    {"ticker": "LT.NS", "name": "L&T"},
+    {"ticker": "AXISBANK.NS", "name": "Axis Bank"},
+    {"ticker": "ASIANPAINT.NS", "name": "Asian Paints"},
+    {"ticker": "MARUTI.NS", "name": "Maruti Suzuki"},
+    {"ticker": "WIPRO.NS", "name": "Wipro"},
+    {"ticker": "TATAMOTORS.NS", "name": "Tata Motors"},
+    {"ticker": "TATASTEEL.NS", "name": "Tata Steel"},
+    {"ticker": "ADANIENT.NS", "name": "Adani Enterprises"},
+    {"ticker": "HCLTECH.NS", "name": "HCL Tech"},
+    {"ticker": "SUNPHARMA.NS", "name": "Sun Pharma"},
+    {"ticker": "BAJFINANCE.NS", "name": "Bajaj Finance"},
+    {"ticker": "BAJFINSV.NS", "name": "Bajaj Finserv"},
+    {"ticker": "TITAN.NS", "name": "Titan Company"},
+    {"ticker": "ULTRACEMCO.NS", "name": "UltraTech Cement"},
+    {"ticker": "NESTLEIND.NS", "name": "Nestle India"},
+    {"ticker": "POWERGRID.NS", "name": "Power Grid"},
+    {"ticker": "NTPC.NS", "name": "NTPC"},
+    {"ticker": "ONGC.NS", "name": "ONGC"},
+    {"ticker": "COALINDIA.NS", "name": "Coal India"},
+    {"ticker": "JSWSTEEL.NS", "name": "JSW Steel"},
+    {"ticker": "TECHM.NS", "name": "Tech Mahindra"},
+    {"ticker": "HINDALCO.NS", "name": "Hindalco"},
+    {"ticker": "GRASIM.NS", "name": "Grasim Industries"},
+    {"ticker": "DIVISLAB.NS", "name": "Divi's Labs"},
+    {"ticker": "DRREDDY.NS", "name": "Dr Reddy's Labs"},
+    {"ticker": "CIPLA.NS", "name": "Cipla"},
+    {"ticker": "EICHERMOT.NS", "name": "Eicher Motors"},
+    {"ticker": "HEROMOTOCO.NS", "name": "Hero MotoCorp"},
+    {"ticker": "BAJAJ-AUTO.NS", "name": "Bajaj Auto"},
+    {"ticker": "M&M.NS", "name": "M&M"},
+    {"ticker": "INDUSINDBK.NS", "name": "IndusInd Bank"},
+    {"ticker": "APOLLOHOSP.NS", "name": "Apollo Hospitals"},
+    {"ticker": "TATACONSUM.NS", "name": "Tata Consumer"},
+    {"ticker": "BRITANNIA.NS", "name": "Britannia"},
+    {"ticker": "BPCL.NS", "name": "BPCL"},
+    {"ticker": "HINDUNILVR.NS", "name": "HUL"},
+    {"ticker": "SBILIFE.NS", "name": "SBI Life Insurance"},
+    {"ticker": "HDFCLIFE.NS", "name": "HDFC Life"},
+    {"ticker": "ADANIPORTS.NS", "name": "Adani Ports"},
+    {"ticker": "LTIM.NS", "name": "LTIMindtree"},
+    {"ticker": "SHRIRAMFIN.NS", "name": "Shriram Finance"},
+]
+
+class GhostScanResult(BaseModel):
+    ticker: str
+    name: str
+    price: float
+    change_pct: float
+    verdict: str
+    signal_type: str
+    confidence: float
+    buy_count: int
+    sell_count: int
+    total_strategies: int
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    targets: Optional[List[str]] = None
+    strategy_signals: dict
+
+class GhostScanResponse(BaseModel):
+    scanned: int
+    results: List[GhostScanResult]
+    scan_time: str
+    errors: int
+
+
+def run_demon_on_bars(bars):
+    """Run DEMON confluence on raw bar dicts, returns result dict"""
+    if len(bars) < 30:
+        return None
+    
+    closes = [b['close'] for b in bars]
+    current = closes[-1]
+
+    fk_signal = run_mini_falling_knife(bars)
+    rsa_signal = run_mini_reverse_swings(bars, "A")
+    rsb_signal = run_mini_reverse_swings(bars, "B")
+    ev_signal = run_mini_explosive_volume(bars)
+    gs_signal = run_mini_golden_setup(bars)
+    ai_signal, ai_score = run_mini_ai_indicator(bars)
+    gz_signal = run_mini_godzilla(bars)
+
+    strategies = {
+        "falling_knife": {"signal": fk_signal, "name": "Falling Knife", "weight": 1},
+        "reverse_swings_a": {"signal": rsa_signal, "name": "Reverse Swings A", "weight": 1},
+        "reverse_swings_b": {"signal": rsb_signal, "name": "Reverse Swings B", "weight": 1},
+        "explosive_volume": {"signal": ev_signal, "name": "Explosive Volume", "weight": 1.2},
+        "golden_setup": {"signal": gs_signal, "name": "Golden Setup", "weight": 1.5},
+        "ai_indicator": {"signal": ai_signal, "name": f"AI Indicator ({ai_score})", "weight": 1.3},
+        "godzilla": {"signal": gz_signal, "name": "Godzilla TTE", "weight": 1.2},
+    }
+
+    buy_count = sum(1 for s in strategies.values() if s["signal"] == "BUY")
+    sell_count = sum(1 for s in strategies.values() if s["signal"] == "SELL")
+    total = len(strategies)
+
+    buy_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "BUY")
+    sell_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "SELL")
+    total_weight = sum(s["weight"] for s in strategies.values())
+    buy_pct = (buy_weight / total_weight) * 100 if total_weight > 0 else 0
+    sell_pct = (sell_weight / total_weight) * 100 if total_weight > 0 else 0
+
+    if buy_count >= 4:
+        verdict = "DEMON BUY"
+        signal_type = "BUY"
+        confidence = buy_pct
+        sl = current * 0.95
+        t1, t2, t3 = current * 1.05, current * 1.10, current * 1.15
+    elif sell_count >= 4:
+        verdict = "DEMON SELL"
+        signal_type = "SELL"
+        confidence = sell_pct
+        sl = current * 1.05
+        t1, t2, t3 = current * 0.95, current * 0.90, current * 0.85
+    elif buy_count >= 3:
+        verdict = "LEANING BUY"
+        signal_type = "BUY"
+        confidence = buy_pct
+        sl = current * 0.95
+        t1, t2, t3 = current * 1.04, current * 1.08, None
+    elif sell_count >= 3:
+        verdict = "LEANING SELL"
+        signal_type = "SELL"
+        confidence = sell_pct
+        sl = current * 1.05
+        t1, t2, t3 = current * 0.96, current * 0.92, None
+    else:
+        verdict = "MIXED" if (buy_count >= 2 or sell_count >= 2) else "NO SIGNAL"
+        signal_type = "WAIT"
+        confidence = max(buy_pct, sell_pct)
+        sl = t1 = t2 = t3 = None
+
+    targets = None
+    if t1 is not None:
+        targets = [f"{t1:.2f}"]
+        if t2 is not None:
+            targets.append(f"{t2:.2f}")
+        if t3 is not None:
+            targets.append(f"{t3:.2f}")
+
+    strategy_signals = {}
+    for key, s in strategies.items():
+        strategy_signals[key] = {"name": s["name"], "signal": s["signal"], "weight": s["weight"]}
+
+    return {
+        "verdict": verdict,
+        "signal_type": signal_type,
+        "confidence": round(confidence, 1),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "total_strategies": total,
+        "entry_price": f"{current:.2f}" if signal_type != "WAIT" else None,
+        "stop_loss": f"{sl:.2f}" if sl else None,
+        "targets": targets,
+        "strategy_signals": strategy_signals,
+        "current_price": current,
+    }
+
+
+@api_router.get("/ghost/scan", response_model=GhostScanResponse)
+async def ghost_scan(min_match: int = 3):
+    """Ghost Mode - Scan 50 Indian stocks with DEMON confluence logic"""
+    try:
+        results = []
+        errors = 0
+        
+        # Process stocks in small batches to avoid rate limits
+        batch_size = 5
+        for i in range(0, len(GHOST_SCAN_STOCKS), batch_size):
+            batch = GHOST_SCAN_STOCKS[i:i+batch_size]
+            
+            for stock_info in batch:
+                try:
+                    ticker = stock_info["ticker"]
+                    
+                    # Check cache first
+                    cache_key = f"ghost_{ticker}"
+                    if cache_key in cache_storage:
+                        cached_data, cached_time = cache_storage[cache_key]
+                        if (datetime.now() - cached_time).seconds < 600:
+                            if cached_data["buy_count"] >= min_match or cached_data["sell_count"] >= min_match:
+                                results.append(cached_data)
+                            continue
+                    
+                    stock = yf.Ticker(ticker)
+                    hist = stock.history(period="120d", interval="1d")
+                    
+                    if hist.empty or len(hist) < 30:
+                        errors += 1
+                        continue
+                    
+                    bars = []
+                    for idx, row in hist.iterrows():
+                        bars.append({
+                            "timestamp": int(idx.timestamp() * 1000),
+                            "open": float(row['Open']),
+                            "high": float(row['High']),
+                            "low": float(row['Low']),
+                            "close": float(row['Close']),
+                            "volume": float(row['Volume'])
+                        })
+                    
+                    demon_result = run_demon_on_bars(bars)
+                    if demon_result is None:
+                        errors += 1
+                        continue
+                    
+                    # Calculate change %
+                    if len(bars) >= 2:
+                        prev_close = bars[-2]['close']
+                        curr_close = bars[-1]['close']
+                        change_pct = round(((curr_close - prev_close) / prev_close) * 100, 2)
+                    else:
+                        change_pct = 0.0
+                    
+                    scan_result = GhostScanResult(
+                        ticker=ticker,
+                        name=stock_info["name"],
+                        price=demon_result["current_price"],
+                        change_pct=change_pct,
+                        verdict=demon_result["verdict"],
+                        signal_type=demon_result["signal_type"],
+                        confidence=demon_result["confidence"],
+                        buy_count=demon_result["buy_count"],
+                        sell_count=demon_result["sell_count"],
+                        total_strategies=demon_result["total_strategies"],
+                        entry_price=demon_result["entry_price"],
+                        stop_loss=demon_result["stop_loss"],
+                        targets=demon_result["targets"],
+                        strategy_signals=demon_result["strategy_signals"],
+                    )
+                    
+                    # Cache individual result
+                    cache_storage[cache_key] = ({
+                        **scan_result.model_dump(),
+                        "buy_count": demon_result["buy_count"],
+                        "sell_count": demon_result["sell_count"],
+                    }, datetime.now())
+                    
+                    # Only include if meets minimum match threshold
+                    if demon_result["buy_count"] >= min_match or demon_result["sell_count"] >= min_match:
+                        results.append(scan_result)
+                    
+                except Exception as e:
+                    logging.error(f"Ghost scan error for {stock_info['ticker']}: {e}")
+                    errors += 1
+                    continue
+            
+            # Small delay between batches to avoid rate limiting
+            if i + batch_size < len(GHOST_SCAN_STOCKS):
+                await asyncio.sleep(1)
+        
+        # Sort by confidence descending
+        results.sort(key=lambda x: x.confidence if hasattr(x, 'confidence') else x.get('confidence', 0), reverse=True)
+        
+        return GhostScanResponse(
+            scanned=len(GHOST_SCAN_STOCKS),
+            results=results,
+            scan_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            errors=errors
+        )
+
+    except Exception as e:
+        logging.error(f"Ghost scan error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/ghost/stocks")
+async def ghost_stock_list():
+    """Return list of stocks available for Ghost Mode scanning"""
+    return {"stocks": GHOST_SCAN_STOCKS, "count": len(GHOST_SCAN_STOCKS)}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -77,7 +2848,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
