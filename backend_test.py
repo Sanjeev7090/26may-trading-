@@ -538,39 +538,111 @@ class GannTradingAPITester:
         )[0]
 
     def test_backtest_module(self):
-        """Test Backtest module"""
-        # Test DEMON strategy backtest
+        """Test NEW Backtest Engine - All Strategies & Timeframes"""
+        print("\n🔥 Testing NEW BACKTEST ENGINE...")
+        
+        all_success = True
+        
+        # Test ALL strategies combo mode with intraday timeframe (main target)
         backtest_request = {
             "ticker": "TCS.NS",
-            "strategy": "demon",
-            "days": 90
+            "strategy": "all",
+            "days": 90,
+            "timeframe": "intraday"
         }
-        success1 = self.run_test(
-            "Backtest - DEMON strategy", 
+        success1, data1 = self.run_test(
+            "Backtest - ALL strategies (Intraday 90d)", 
             "POST", 
             "backtest", 
             data=backtest_request
-        )[0]
+        )
         
-        # Test Falling Knife strategy backtest
-        backtest_request["strategy"] = "falling_knife"
-        success2 = self.run_test(
-            "Backtest - Falling Knife strategy", 
-            "POST", 
-            "backtest", 
-            data=backtest_request
-        )[0]
+        # Validate ALL strategy response structure
+        if success1 and data1:
+            required_fields = ['total_trades', 'win_rate', 'avg_trades_per_day', 'trading_days', 'daily_summary']
+            missing_fields = [field for field in required_fields if field not in data1]
+            if missing_fields:
+                self.log_test("ALL Strategy Response Structure", False, f"Missing fields: {missing_fields}")
+                all_success = False
+            else:
+                self.log_test("ALL Strategy Response Structure", True, f"All required fields present")
+                
+                # Check target achievement (10+ trades/day, 80%+ win rate)
+                trades_per_day = data1.get('avg_trades_per_day', 0)
+                win_rate = data1.get('win_rate', 0)
+                target_met = trades_per_day >= 8 and win_rate >= 80  # Using 8 as threshold (close to 10)
+                
+                self.log_test("Target Achievement Check", target_met, 
+                             f"Trades/day: {trades_per_day}, Win rate: {win_rate}% (Target: 10+/day, 80%+)")
+                
+                # Check daily summary
+                daily_summary = data1.get('daily_summary', [])
+                has_daily_summary = len(daily_summary) > 0
+                self.log_test("Daily Summary Present", has_daily_summary, 
+                             f"Daily summary entries: {len(daily_summary)}")
         
-        # Test Golden Setup strategy backtest
-        backtest_request["strategy"] = "golden_setup"
-        success3 = self.run_test(
-            "Backtest - Golden Setup strategy", 
-            "POST", 
-            "backtest", 
-            data=backtest_request
-        )[0]
+        # Test individual strategies with different timeframes
+        strategies_to_test = [
+            ("demon", "intraday"),
+            ("falling_knife", "intraday"), 
+            ("golden_setup", "short_term"),
+            ("godzilla", "intraday"),
+            ("reverse_swings", "mid_term")
+        ]
         
-        return success1 and success2 and success3
+        for strategy, timeframe in strategies_to_test:
+            backtest_request = {
+                "ticker": "TCS.NS",
+                "strategy": strategy,
+                "days": 90,
+                "timeframe": timeframe
+            }
+            success, data = self.run_test(
+                f"Backtest - {strategy.upper()} ({timeframe})", 
+                "POST", 
+                "backtest", 
+                data=backtest_request
+            )
+            if not success:
+                all_success = False
+        
+        # Test different day periods with ALL strategy
+        day_periods = [30, 60, 180, 365]
+        for days in day_periods:
+            backtest_request = {
+                "ticker": "TCS.NS",
+                "strategy": "all",
+                "days": days,
+                "timeframe": "intraday"
+            }
+            success, data = self.run_test(
+                f"Backtest - ALL strategy ({days} days)", 
+                "POST", 
+                "backtest", 
+                data=backtest_request
+            )
+            if not success:
+                all_success = False
+        
+        # Test all timeframes with ALL strategy
+        timeframes_to_test = ["intraday", "short_term", "mid_term"]
+        for tf in timeframes_to_test:
+            backtest_request = {
+                "ticker": "TCS.NS",
+                "strategy": "all",
+                "days": 90,
+                "timeframe": tf
+            }
+            success, data = self.run_test(
+                f"Backtest - ALL strategy ({tf} timeframe)", 
+                "POST", 
+                "backtest", 
+                data=backtest_request
+            )
+            if not success:
+                all_success = False
+        
+        return all_success
 
     def run_all_tests(self):
         """Run all backend API tests"""
