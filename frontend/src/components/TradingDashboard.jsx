@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import StockSearch from './StockSearch';
 import ChartPanel from './ChartPanel';
@@ -14,8 +14,13 @@ import AIIndicatorScore from './AIIndicatorScore';
 import GodzillaSetupAnalysis from './GodzillaSetupAnalysis';
 import DemonAnalysis from './DemonAnalysis';
 import GhostModeScanner from './GhostModeScanner';
-import { Toaster } from 'sonner';
-import { toast } from 'sonner';
+import Watchlist from './Watchlist';
+import PortfolioTracker from './PortfolioTracker';
+import AlertSystem from './AlertSystem';
+import GPTAnalysis from './GPTAnalysis';
+import BacktestModule from './BacktestModule';
+import { Toaster, toast } from 'sonner';
+import { Star, Wallet, Bell, ChartLineUp, List } from '@phosphor-icons/react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -30,6 +35,27 @@ const TradingDashboard = () => {
   const [semiLogScale, setSemiLogScale] = useState(false);
   const [timeframe, setTimeframe] = useState({ multiplier: 1, timespan: 'day', label: '1D' });
   const [activeTab, setActiveTab] = useState('strategies');
+  const [leftTab, setLeftTab] = useState('search');
+  const [mobilePanel, setMobilePanel] = useState('chart');
+  const wsRef = useRef(null);
+
+  // WebSocket connection for real-time prices
+  useEffect(() => {
+    const wsUrl = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws/prices';
+    try {
+      const ws = new WebSocket(wsUrl);
+      ws.onopen = () => { wsRef.current = ws; };
+      ws.onclose = () => { wsRef.current = null; };
+      ws.onerror = () => {};
+      return () => { if (ws.readyState === WebSocket.OPEN) ws.close(); };
+    } catch { /* WebSocket not critical */ }
+  }, []);
+
+  const subscribeWS = (ticker) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: 'subscribe', tickers: [ticker] }));
+    }
+  };
 
   const fetchStockData = async (ticker, tf) => {
     setLoading(true);
@@ -60,6 +86,8 @@ const TradingDashboard = () => {
     const defaultTf = { multiplier: 1, timespan: 'day', label: '1D' };
     setTimeframe(defaultTf);
     fetchStockData(stock.ticker, defaultTf);
+    subscribeWS(stock.ticker);
+    setMobilePanel('chart');
   };
 
   const handleTimeframeChange = (tf) => {
@@ -107,10 +135,24 @@ const TradingDashboard = () => {
     }
   }, [pivotPoint, selectedStock]);
 
-  const tabs = [
+  const rightTabs = [
     { id: 'strategies', label: 'STRATEGIES' },
     { id: 'ghost', label: 'GHOST' },
+    { id: 'backtest', label: 'BACKTEST' },
     { id: 'tools', label: 'TOOLS' },
+  ];
+
+  const leftTabs = [
+    { id: 'search', label: 'Search' },
+    { id: 'watchlist', label: 'Watchlist', icon: Star },
+    { id: 'portfolio', label: 'Portfolio', icon: Wallet },
+    { id: 'alerts', label: 'Alerts', icon: Bell },
+  ];
+
+  const mobilePanels = [
+    { id: 'left', label: 'Menu', icon: List },
+    { id: 'chart', label: 'Chart', icon: ChartLineUp },
+    { id: 'right', label: 'Strategies', icon: Star },
   ];
 
   return (
@@ -118,54 +160,75 @@ const TradingDashboard = () => {
       <Toaster theme="dark" position="top-right" richColors />
 
       {/* Header */}
-      <header className="h-14 border-b border-white/10 flex items-center justify-between px-4 lg:px-6 bg-[#0A0A0A]/90 backdrop-blur-md z-50 shrink-0" data-testid="dashboard-header">
-        <div className="flex items-center gap-4">
-          <h1 className="text-base lg:text-lg font-black tracking-tighter uppercase" style={{ fontFamily: "'Chivo', sans-serif" }}>
+      <header className="h-12 md:h-14 border-b border-white/10 flex items-center justify-between px-3 lg:px-6 bg-[#0A0A0A]/90 backdrop-blur-md z-50 shrink-0" data-testid="dashboard-header">
+        <div className="flex items-center gap-3">
+          <h1 className="text-sm md:text-lg font-black tracking-tighter uppercase" style={{ fontFamily: "'Chivo', sans-serif" }}>
             <span className="text-white">GANN</span>
             <span className="text-[#00E676] ml-1">TRADER</span>
           </h1>
-          <span className="hidden md:inline text-[10px] text-zinc-500 font-mono tracking-wider border border-white/10 px-2 py-0.5">NSE</span>
+          <span className="hidden sm:inline text-[10px] text-zinc-500 font-mono tracking-wider border border-white/10 px-2 py-0.5">NSE</span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 md:gap-3">
           {selectedStock && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono text-[#00E676]" data-testid="selected-ticker">{selectedStock.ticker}</span>
-              <span className="text-[10px] text-zinc-500">{selectedStock.name}</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] md:text-xs font-mono text-[#00E676]" data-testid="selected-ticker">{selectedStock.ticker}</span>
+              <span className="hidden sm:inline text-[10px] text-zinc-500">{selectedStock.name}</span>
             </div>
           )}
         </div>
       </header>
 
+      {/* Mobile Tab Bar */}
+      <div className="flex lg:hidden border-b border-white/10 shrink-0">
+        {mobilePanels.map(p => (
+          <button key={p.id} onClick={() => setMobilePanel(p.id)}
+            className={`flex-1 py-2 flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.15em] transition-colors ${
+              mobilePanel === p.id ? 'text-white border-b-2 border-white bg-white/5' : 'text-zinc-500'
+            }`}
+            data-testid={`mobile-panel-${p.id}`}>
+            <p.icon size={12} weight={mobilePanel === p.id ? 'fill' : 'regular'} />
+            {p.label}
+          </button>
+        ))}
+      </div>
+
       {/* Main Grid */}
-      <div className="flex-1 flex flex-col lg:grid lg:grid-cols-12 overflow-hidden">
+      <div className="flex-1 flex flex-col lg:grid lg:grid-cols-12 overflow-hidden" style={{ height: 'calc(100vh - 56px)' }}>
 
         {/* Left Sidebar */}
-        <aside className="lg:col-span-3 xl:col-span-2 border-b lg:border-b-0 lg:border-r border-white/10 flex flex-col overflow-y-auto" data-testid="left-sidebar">
-          <div className="p-3 border-b border-white/10">
-            <StockSearch onStockSelect={handleStockSelect} selectedStock={selectedStock} />
+        <aside className={`lg:col-span-3 xl:col-span-2 border-r border-white/10 flex flex-col overflow-y-auto ${mobilePanel !== 'left' ? 'hidden lg:flex' : 'flex'}`} data-testid="left-sidebar">
+          {/* Left Tabs */}
+          <div className="flex border-b border-white/10 shrink-0">
+            {leftTabs.map(tab => (
+              <button key={tab.id} onClick={() => setLeftTab(tab.id)}
+                className={`flex-1 py-2 text-[9px] font-bold uppercase tracking-[0.15em] transition-colors ${
+                  leftTab === tab.id ? 'text-white border-b-2 border-white bg-white/5' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+                data-testid={`left-tab-${tab.id}`}>
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          {signal && (
-            <div className="border-b border-white/10">
-              <SignalDashboard signal={signal} />
-            </div>
-          )}
-
-          {stockData && (
-            <div className="border-b border-white/10">
-              <SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} />
-            </div>
-          )}
-
-          {selectedStock && selectedStock.type === 'INDEX' && (
-            <div className="border-b border-white/10">
-              <OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} />
-            </div>
-          )}
+          <div className="flex-1 overflow-y-auto">
+            {leftTab === 'search' && (
+              <>
+                <div className="p-3 border-b border-white/10">
+                  <StockSearch onStockSelect={handleStockSelect} selectedStock={selectedStock} />
+                </div>
+                {signal && <div className="border-b border-white/10"><SignalDashboard signal={signal} /></div>}
+                {stockData && <div className="border-b border-white/10"><SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} /></div>}
+                {selectedStock && selectedStock.type === 'INDEX' && <div className="border-b border-white/10"><OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} /></div>}
+              </>
+            )}
+            {leftTab === 'watchlist' && <Watchlist onStockSelect={handleStockSelect} selectedStock={selectedStock} />}
+            {leftTab === 'portfolio' && <PortfolioTracker selectedStock={selectedStock} />}
+            {leftTab === 'alerts' && <AlertSystem selectedStock={selectedStock} />}
+          </div>
         </aside>
 
         {/* Center Chart */}
-        <main className="lg:col-span-6 xl:col-span-7 flex flex-col relative min-h-[400px] lg:min-h-0" data-testid="center-chart">
+        <main className={`lg:col-span-6 xl:col-span-7 flex flex-col relative min-h-[300px] lg:min-h-0 ${mobilePanel !== 'chart' ? 'hidden lg:flex' : 'flex'}`} data-testid="center-chart">
           <ChartPanel
             stockData={stockData}
             loading={loading}
@@ -181,20 +244,15 @@ const TradingDashboard = () => {
         </main>
 
         {/* Right Sidebar */}
-        <aside className="lg:col-span-3 border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col overflow-hidden" data-testid="right-sidebar">
+        <aside className={`lg:col-span-3 border-l border-white/10 flex flex-col overflow-hidden ${mobilePanel !== 'right' ? 'hidden lg:flex' : 'flex'}`} data-testid="right-sidebar">
           {/* Tabs */}
           <div className="flex border-b border-white/10 shrink-0">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 py-2.5 text-[10px] font-bold uppercase tracking-[0.2em] transition-colors ${
-                  activeTab === tab.id
-                    ? 'text-white border-b-2 border-white bg-white/5'
-                    : 'text-zinc-500 hover:text-zinc-300'
+            {rightTabs.map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                className={`flex-1 py-2.5 text-[9px] font-bold uppercase tracking-[0.15em] transition-colors ${
+                  activeTab === tab.id ? 'text-white border-b-2 border-white bg-white/5' : 'text-zinc-500 hover:text-zinc-300'
                 }`}
-                data-testid={`tab-${tab.id}`}
-              >
+                data-testid={`tab-${tab.id}`}>
                 {tab.label}
               </button>
             ))}
@@ -206,6 +264,7 @@ const TradingDashboard = () => {
               <div className="divide-y divide-white/10">
                 {selectedStock && stockData && (
                   <>
+                    <GPTAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <AITradeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <FallingKnifeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <ReversePriceSwings stockData={stockData} selectedStock={selectedStock} />
@@ -226,6 +285,10 @@ const TradingDashboard = () => {
 
             {activeTab === 'ghost' && (
               <GhostModeScanner onStockSelect={handleStockSelect} />
+            )}
+
+            {activeTab === 'backtest' && (
+              <BacktestModule selectedStock={selectedStock} />
             )}
 
             {activeTab === 'tools' && (

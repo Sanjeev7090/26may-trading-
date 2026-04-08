@@ -36,11 +36,13 @@ class GannTradingAPITester:
                 response = requests.get(url, headers=headers, params=params, timeout=30)
             elif method == 'POST':
                 response = requests.post(url, json=data, headers=headers, timeout=30)
+            elif method == 'DELETE':
+                response = requests.delete(url, headers=headers, timeout=30)
             
             success = response.status_code == expected_status
             details = f"Status: {response.status_code}"
             
-            if success and response.status_code == 200:
+            if success and response.status_code in [200, 201]:
                 try:
                     json_data = response.json()
                     if isinstance(json_data, dict):
@@ -57,7 +59,7 @@ class GannTradingAPITester:
                     details += f", Response: {response.text[:100]}"
             
             self.log_test(name, success, details)
-            return success, response.json() if success else {}
+            return success, response.json() if success and response.status_code in [200, 201] else {}
             
         except Exception as e:
             self.log_test(name, False, f"Exception: {str(e)}")
@@ -327,9 +329,252 @@ class GannTradingAPITester:
             }
         )[0]
 
+    def test_watchlist_crud(self):
+        """Test Watchlist CRUD operations"""
+        # Test GET empty watchlist
+        success1, data1 = self.run_test(
+            "Watchlist - GET (initial)", 
+            "GET", 
+            "watchlist"
+        )
+        
+        # Test POST - Add to watchlist (use unique ticker)
+        import time
+        unique_ticker = f"INFY.NS"  # Use different ticker to avoid conflicts
+        watchlist_item = {
+            "ticker": unique_ticker,
+            "name": "Infosys Ltd",
+            "stock_type": "STOCK"
+        }
+        success2, data2 = self.run_test(
+            "Watchlist - POST (add INFY)", 
+            "POST", 
+            "watchlist",
+            data=watchlist_item,
+            expected_status=201
+        )
+        
+        # Test GET watchlist with items
+        success3, data3 = self.run_test(
+            "Watchlist - GET (with items)", 
+            "GET", 
+            "watchlist"
+        )
+        
+        # Test GET watchlist with prices
+        success4, data4 = self.run_test(
+            "Watchlist - GET with prices", 
+            "GET", 
+            "watchlist/prices"
+        )
+        
+        # Test DELETE from watchlist
+        success5, data5 = self.run_test(
+            "Watchlist - DELETE INFY", 
+            "DELETE", 
+            f"watchlist/{unique_ticker}",
+            expected_status=200
+        )
+        
+        return success1 and success2 and success3 and success4 and success5
+
+    def test_portfolio_crud(self):
+        """Test Portfolio CRUD operations"""
+        # Test GET empty portfolio
+        success1, data1 = self.run_test(
+            "Portfolio - GET (empty)", 
+            "GET", 
+            "portfolio"
+        )
+        
+        # Test POST - Add portfolio entry
+        portfolio_entry = {
+            "ticker": "RELIANCE.NS",
+            "name": "Reliance Industries Ltd",
+            "buy_price": 2500.0,
+            "quantity": 10,
+            "buy_date": "2024-01-15"
+        }
+        success2, data2 = self.run_test(
+            "Portfolio - POST (add RELIANCE)", 
+            "POST", 
+            "portfolio",
+            data=portfolio_entry,
+            expected_status=201
+        )
+        
+        # Test GET portfolio with entries
+        success3, data3 = self.run_test(
+            "Portfolio - GET (with entries)", 
+            "GET", 
+            "portfolio"
+        )
+        
+        # Test GET portfolio summary
+        success4, data4 = self.run_test(
+            "Portfolio - GET summary", 
+            "GET", 
+            "portfolio/summary"
+        )
+        
+        # Get entry ID for deletion (if available)
+        entry_id = None
+        if success3 and data3.get('entries') and len(data3['entries']) > 0:
+            entry_id = data3['entries'][0].get('id')
+        
+        # Test DELETE portfolio entry
+        if entry_id:
+            success5, data5 = self.run_test(
+                "Portfolio - DELETE entry", 
+                "DELETE", 
+                f"portfolio/{entry_id}",
+                expected_status=200
+            )
+        else:
+            success5 = True  # Skip if no entry to delete
+            self.log_test("Portfolio - DELETE entry", True, "Skipped - no entry ID available")
+        
+        return success1 and success2 and success3 and success4 and success5
+
+    def test_alerts_crud(self):
+        """Test Alerts CRUD operations"""
+        # Test GET empty alerts
+        success1, data1 = self.run_test(
+            "Alerts - GET (empty)", 
+            "GET", 
+            "alerts"
+        )
+        
+        # Test POST - Create price alert
+        alert_rule = {
+            "ticker": "TCS.NS",
+            "name": "Tata Consultancy Services",
+            "alert_type": "price_above",
+            "threshold": 4000.0
+        }
+        success2, data2 = self.run_test(
+            "Alerts - POST (price above)", 
+            "POST", 
+            "alerts",
+            data=alert_rule,
+            expected_status=201
+        )
+        
+        # Test POST - Create signal alert
+        signal_alert = {
+            "ticker": "RELIANCE.NS",
+            "name": "Reliance Industries Ltd",
+            "alert_type": "demon_buy",
+            "threshold": None
+        }
+        success3, data3 = self.run_test(
+            "Alerts - POST (demon buy signal)", 
+            "POST", 
+            "alerts",
+            data=signal_alert,
+            expected_status=201
+        )
+        
+        # Test GET alerts with items
+        success4, data4 = self.run_test(
+            "Alerts - GET (with items)", 
+            "GET", 
+            "alerts"
+        )
+        
+        # Test POST - Check alerts
+        success5, data5 = self.run_test(
+            "Alerts - POST check", 
+            "POST", 
+            "alerts/check"
+        )
+        
+        # Get alert ID for deletion (if available)
+        alert_id = None
+        if success4 and data4.get('alerts') and len(data4['alerts']) > 0:
+            alert_id = data4['alerts'][0].get('id')
+        
+        # Test DELETE alert
+        if alert_id:
+            success6, data6 = self.run_test(
+                "Alerts - DELETE alert", 
+                "DELETE", 
+                f"alerts/{alert_id}",
+                expected_status=200
+            )
+        else:
+            success6 = True  # Skip if no alert to delete
+            self.log_test("Alerts - DELETE alert", True, "Skipped - no alert ID available")
+        
+        return success1 and success2 and success3 and success4 and success5 and success6
+
+    def test_gpt_analysis(self):
+        """Test GPT Analysis using Emergent LLM"""
+        # Get stock data first
+        success, stock_data = self.run_test(
+            "Get Stock Data for GPT Analysis", 
+            "GET", 
+            "stock/bars/TCS.NS",
+            params={"limit": 60}
+        )
+        
+        if not success or not stock_data.get('bars'):
+            self.log_test("GPT Analysis - No Stock Data", False, "Cannot test without stock data")
+            return False
+        
+        # Prepare GPT analysis request
+        bars = stock_data['bars'][-60:]  # Last 60 bars
+        gpt_request = {
+            "ticker": "TCS.NS",
+            "timeframe": "1D",
+            "bars": bars
+        }
+        
+        return self.run_test(
+            "GPT Analysis (Emergent LLM)", 
+            "POST", 
+            "ai/gpt-analyze", 
+            data=gpt_request
+        )[0]
+
+    def test_backtest_module(self):
+        """Test Backtest module"""
+        # Test DEMON strategy backtest
+        backtest_request = {
+            "ticker": "TCS.NS",
+            "strategy": "demon",
+            "days": 90
+        }
+        success1 = self.run_test(
+            "Backtest - DEMON strategy", 
+            "POST", 
+            "backtest", 
+            data=backtest_request
+        )[0]
+        
+        # Test Falling Knife strategy backtest
+        backtest_request["strategy"] = "falling_knife"
+        success2 = self.run_test(
+            "Backtest - Falling Knife strategy", 
+            "POST", 
+            "backtest", 
+            data=backtest_request
+        )[0]
+        
+        # Test Golden Setup strategy backtest
+        backtest_request["strategy"] = "golden_setup"
+        success3 = self.run_test(
+            "Backtest - Golden Setup strategy", 
+            "POST", 
+            "backtest", 
+            data=backtest_request
+        )[0]
+        
+        return success1 and success2 and success3
+
     def run_all_tests(self):
         """Run all backend API tests"""
-        print(f"🚀 Starting Gann Trading API Tests")
+        print(f"🚀 Starting Gann Trading API Tests - NEW FEATURES")
         print(f"📡 Testing endpoint: {self.base_url}")
         print("=" * 60)
         
@@ -344,6 +589,14 @@ class GannTradingAPITester:
         self.test_reverse_swings_analysis()
         self.test_explosive_volume_analysis()
         self.test_golden_setup_analysis()
+        
+        # NEW FEATURES TESTING
+        print("\n🆕 Testing NEW Features...")
+        self.test_watchlist_crud()
+        self.test_portfolio_crud()
+        self.test_alerts_crud()
+        self.test_gpt_analysis()
+        self.test_backtest_module()
         
         # Utility tests
         self.test_square_of_9()

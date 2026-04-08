@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,15 +6,17 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
 import math
 import asyncio
+import json
 import yfinance as yf
 import pandas as pd
 from nsepython import nse_optionchain_scrapper, nse_quote_ltp
 from openai import OpenAI
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -128,6 +130,95 @@ class OIDataResponse(BaseModel):
     top_strikes: List[dict]
     signal: str
     signal_color: str
+
+
+# --- New Models for Watchlist, Portfolio, Alerts, Backtest, GPT AI ---
+
+class WatchlistItem(BaseModel):
+    ticker: str
+    name: str
+    stock_type: str = "STOCK"
+
+class WatchlistResponse(BaseModel):
+    id: str
+    ticker: str
+    name: str
+    stock_type: str
+    added_at: str
+
+class PortfolioEntry(BaseModel):
+    ticker: str
+    name: str
+    buy_price: float
+    quantity: int
+    buy_date: Optional[str] = None
+
+class PortfolioResponse(BaseModel):
+    id: str
+    ticker: str
+    name: str
+    buy_price: float
+    quantity: int
+    buy_date: str
+    current_price: Optional[float] = None
+    pnl: Optional[float] = None
+    pnl_pct: Optional[float] = None
+
+class AlertRule(BaseModel):
+    ticker: str
+    name: str
+    alert_type: str  # 'price_above', 'price_below', 'demon_buy', 'demon_sell'
+    threshold: Optional[float] = None
+
+class AlertResponse(BaseModel):
+    id: str
+    ticker: str
+    name: str
+    alert_type: str
+    threshold: Optional[float] = None
+    triggered: bool = False
+    triggered_at: Optional[str] = None
+    created_at: str
+
+class GPTAnalysisRequest(BaseModel):
+    ticker: str
+    timeframe: str
+    bars: List[dict]
+
+class GPTAnalysisResponse(BaseModel):
+    direction: str
+    entry_price: str
+    stoploss: str
+    targets: List[str]
+    reason: str
+    confidence: int
+    key_levels: Optional[List[str]] = None
+    risk_reward: Optional[str] = None
+
+class BacktestRequest(BaseModel):
+    ticker: str
+    strategy: str  # 'falling_knife', 'golden_setup', 'demon', 'reverse_swings', 'godzilla'
+    days: int = 365
+
+class BacktestTradeResult(BaseModel):
+    entry_date: str
+    exit_date: str
+    entry_price: float
+    exit_price: float
+    pnl_pct: float
+    signal: str
+
+class BacktestResponse(BaseModel):
+    ticker: str
+    strategy: str
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: float
+    avg_return: float
+    max_drawdown: float
+    total_return: float
+    trades: List[BacktestTradeResult]
 
 
 @api_router.get("/")
@@ -2836,6 +2927,499 @@ async def ghost_scan(min_match: int = 3):
 async def ghost_stock_list():
     """Return list of stocks available for Ghost Mode scanning"""
     return {"stocks": GHOST_SCAN_STOCKS, "count": len(GHOST_SCAN_STOCKS)}
+
+
+# ======================= WATCHLIST =======================
+
+@api_router.get("/watchlist")
+async def get_watchlist():
+    """Get all watchlist items"""
+    items = await db.watchlist.find({}, {"_id": 0}).to_list(100)
+    return {"items": items}
+
+@api_router.post("/watchlist", status_code=201)
+async def add_to_watchlist(item: WatchlistItem):
+    """Add stock to watchlist"""
+    existing = await db.watchlist.find_one({"ticker": item.ticker}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Stock already in watchlist")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "ticker": item.ticker,
+        "name": item.name,
+        "stock_type": item.stock_type,
+        "added_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.watchlist.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/watchlist/{ticker}")
+async def remove_from_watchlist(ticker: str):
+    """Remove stock from watchlist"""
+    result = await db.watchlist.delete_one({"ticker": ticker})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Stock not in watchlist")
+    return {"message": "Removed from watchlist"}
+
+@api_router.get("/watchlist/prices")
+async def get_watchlist_prices():
+    """Get live prices for all watchlist stocks"""
+    items = await db.watchlist.find({}, {"_id": 0}).to_list(100)
+    results = []
+    for item in items:
+        try:
+            ticker_obj = yf.Ticker(item["ticker"])
+            hist = ticker_obj.history(period="2d")
+            if not hist.empty:
+                current = hist['Close'].iloc[-1]
+                prev = hist['Close'].iloc[-2] if len(hist) > 1 else current
+                change_pct = ((current - prev) / prev * 100) if prev else 0
+                results.append({
+                    **item,
+                    "price": round(current, 2),
+                    "change_pct": round(change_pct, 2)
+                })
+            else:
+                results.append({**item, "price": None, "change_pct": None})
+        except Exception:
+            results.append({**item, "price": None, "change_pct": None})
+    return {"items": results}
+
+
+# ======================= PORTFOLIO =======================
+
+@api_router.get("/portfolio")
+async def get_portfolio():
+    """Get all portfolio entries with current P&L"""
+    entries = await db.portfolio.find({}, {"_id": 0}).to_list(100)
+    results = []
+    for entry in entries:
+        try:
+            ticker_obj = yf.Ticker(entry["ticker"])
+            hist = ticker_obj.history(period="1d")
+            current_price = hist['Close'].iloc[-1] if not hist.empty else None
+            if current_price:
+                pnl = (current_price - entry["buy_price"]) * entry["quantity"]
+                pnl_pct = ((current_price - entry["buy_price"]) / entry["buy_price"]) * 100
+                entry["current_price"] = round(current_price, 2)
+                entry["pnl"] = round(pnl, 2)
+                entry["pnl_pct"] = round(pnl_pct, 2)
+        except Exception:
+            entry["current_price"] = None
+            entry["pnl"] = None
+            entry["pnl_pct"] = None
+        results.append(entry)
+    return {"entries": results}
+
+@api_router.post("/portfolio", status_code=201)
+async def add_portfolio_entry(entry: PortfolioEntry):
+    """Add stock to portfolio"""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "ticker": entry.ticker,
+        "name": entry.name,
+        "buy_price": entry.buy_price,
+        "quantity": entry.quantity,
+        "buy_date": entry.buy_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    }
+    await db.portfolio.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/portfolio/{entry_id}")
+async def delete_portfolio_entry(entry_id: str):
+    """Remove stock from portfolio"""
+    result = await db.portfolio.delete_one({"id": entry_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return {"message": "Removed from portfolio"}
+
+@api_router.get("/portfolio/summary")
+async def portfolio_summary():
+    """Get portfolio summary stats"""
+    entries = await db.portfolio.find({}, {"_id": 0}).to_list(100)
+    total_invested = 0
+    total_current = 0
+    for entry in entries:
+        invested = entry["buy_price"] * entry["quantity"]
+        total_invested += invested
+        try:
+            ticker_obj = yf.Ticker(entry["ticker"])
+            hist = ticker_obj.history(period="1d")
+            if not hist.empty:
+                current = hist['Close'].iloc[-1]
+                total_current += current * entry["quantity"]
+            else:
+                total_current += invested
+        except Exception:
+            total_current += invested
+    total_pnl = total_current - total_invested
+    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+    return {
+        "total_invested": round(total_invested, 2),
+        "total_current": round(total_current, 2),
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_pct": round(total_pnl_pct, 2),
+        "holdings_count": len(entries)
+    }
+
+
+# ======================= ALERTS =======================
+
+@api_router.get("/alerts")
+async def get_alerts():
+    """Get all alerts"""
+    alerts = await db.alerts.find({}, {"_id": 0}).to_list(100)
+    return {"alerts": alerts}
+
+@api_router.post("/alerts", status_code=201)
+async def create_alert(rule: AlertRule):
+    """Create a new alert"""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "ticker": rule.ticker,
+        "name": rule.name,
+        "alert_type": rule.alert_type,
+        "threshold": rule.threshold,
+        "triggered": False,
+        "triggered_at": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.alerts.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/alerts/{alert_id}")
+async def delete_alert(alert_id: str):
+    """Delete an alert"""
+    result = await db.alerts.delete_one({"id": alert_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"message": "Alert deleted"}
+
+@api_router.post("/alerts/check")
+async def check_alerts():
+    """Check all active alerts and trigger matching ones"""
+    alerts = await db.alerts.find({"triggered": False}, {"_id": 0}).to_list(100)
+    triggered = []
+    for alert in alerts:
+        try:
+            ticker_obj = yf.Ticker(alert["ticker"])
+            hist = ticker_obj.history(period="1d")
+            if hist.empty:
+                continue
+            current = hist['Close'].iloc[-1]
+            should_trigger = False
+            if alert["alert_type"] == "price_above" and alert["threshold"] and current >= alert["threshold"]:
+                should_trigger = True
+            elif alert["alert_type"] == "price_below" and alert["threshold"] and current <= alert["threshold"]:
+                should_trigger = True
+            if should_trigger:
+                await db.alerts.update_one(
+                    {"id": alert["id"]},
+                    {"$set": {"triggered": True, "triggered_at": datetime.now(timezone.utc).isoformat()}}
+                )
+                alert["triggered"] = True
+                alert["triggered_at"] = datetime.now(timezone.utc).isoformat()
+                alert["current_price"] = round(current, 2)
+                triggered.append(alert)
+        except Exception as e:
+            logging.error(f"Alert check error for {alert['ticker']}: {e}")
+    return {"triggered": triggered, "checked": len(alerts)}
+
+
+# ======================= GPT ENHANCED AI ANALYSIS =======================
+
+@api_router.post("/ai/gpt-analyze", response_model=GPTAnalysisResponse)
+async def gpt_analyze_chart(request: GPTAnalysisRequest):
+    """Enhanced AI analysis using GPT for deeper trade reasoning"""
+    try:
+        bars_data = request.bars[-60:]
+        highs = [b['high'] for b in bars_data]
+        lows = [b['low'] for b in bars_data]
+        closes = [b['close'] for b in bars_data]
+        volumes = [b.get('volume', 0) for b in bars_data]
+        current_price = closes[-1]
+        highest = max(highs)
+        lowest = min(lows)
+        
+        sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else current_price
+        sma_50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else current_price
+        avg_vol = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else 0
+        
+        gains, losses_list = [], []
+        for i in range(1, min(14, len(closes))):
+            change = closes[i] - closes[i-1]
+            gains.append(max(change, 0))
+            losses_list.append(abs(min(change, 0)))
+        avg_gain = sum(gains) / len(gains) if gains else 0
+        avg_loss = sum(losses_list) / len(losses_list) if losses_list else 0.01
+        rsi = 100 - (100 / (1 + (avg_gain / avg_loss))) if avg_loss else 50
+        
+        support = min(lows[-20:]) if len(lows) >= 20 else lowest
+        resistance = max(highs[-20:]) if len(highs) >= 20 else highest
+        
+        last_5_closes = closes[-5:]
+        price_summary = ", ".join([f"{p:.2f}" for p in last_5_closes])
+
+        prompt_text = f"""Analyze this NSE stock for a trade setup:
+Ticker: {request.ticker} | Timeframe: {request.timeframe}
+Current Price: {current_price:.2f}
+SMA20: {sma_20:.2f} | SMA50: {sma_50:.2f}
+RSI(14): {rsi:.1f}
+Support: {support:.2f} | Resistance: {resistance:.2f}
+52-bar High: {highest:.2f} | 52-bar Low: {lowest:.2f}
+Recent Closes: {price_summary}
+Avg Volume: {avg_vol:.0f}
+
+Provide a JSON response with exactly these fields:
+- direction: "Long" or "Short"
+- entry_price: specific price as string
+- stoploss: specific price as string
+- targets: array of 3 target prices as strings
+- reason: 2-3 sentence detailed reasoning with SMC, patterns, key levels
+- confidence: integer 1-100
+- key_levels: array of important price levels as strings
+- risk_reward: ratio as string like "1:2.5"
+
+Return ONLY valid JSON, no markdown."""
+
+        emergent_key = os.environ.get('EMERGENT_LLM_KEY')
+        if not emergent_key:
+            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+        
+        chat = LlmChat(
+            api_key=emergent_key,
+            session_id=f"gpt-analyze-{request.ticker}-{uuid.uuid4().hex[:8]}",
+            system_message="You are an expert NSE stock trader specializing in Gann angles, SMC, and technical analysis. Always respond with valid JSON only."
+        )
+        chat.with_model("anthropic", "claude-sonnet-4-5")
+        
+        user_message = UserMessage(text=prompt_text)
+        response_text = await chat.send_message(user_message)
+        
+        try:
+            cleaned = response_text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+                cleaned = cleaned.rsplit("```", 1)[0]
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            parsed = {
+                "direction": "Long" if rsi < 50 else "Short",
+                "entry_price": f"{current_price:.2f}",
+                "stoploss": f"{(current_price * 0.98):.2f}" if rsi < 50 else f"{(current_price * 1.02):.2f}",
+                "targets": [f"{(current_price * 1.02):.2f}", f"{(current_price * 1.04):.2f}", f"{(current_price * 1.06):.2f}"],
+                "reason": response_text[:500],
+                "confidence": 60,
+                "key_levels": [f"{support:.2f}", f"{resistance:.2f}"],
+                "risk_reward": "1:2"
+            }
+        
+        return GPTAnalysisResponse(
+            direction=parsed.get("direction", "Long"),
+            entry_price=str(parsed.get("entry_price", f"{current_price:.2f}")),
+            stoploss=str(parsed.get("stoploss", f"{(current_price * 0.98):.2f}")),
+            targets=[str(t) for t in parsed.get("targets", [])],
+            reason=str(parsed.get("reason", "Analysis complete")),
+            confidence=int(parsed.get("confidence", 60)),
+            key_levels=[str(l) for l in parsed.get("key_levels", [])],
+            risk_reward=str(parsed.get("risk_reward", "1:2"))
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"GPT Analysis error: {e}")
+        raise HTTPException(status_code=500, detail=f"GPT Analysis failed: {str(e)}")
+
+
+# ======================= BACKTEST =======================
+
+@api_router.post("/backtest", response_model=BacktestResponse)
+async def run_backtest(request: BacktestRequest):
+    """Run backtest for a strategy on historical data"""
+    try:
+        ticker_obj = yf.Ticker(request.ticker)
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=request.days)
+        hist = ticker_obj.history(start=start_date.strftime("%Y-%m-%d"), end=end_date.strftime("%Y-%m-%d"))
+        
+        if hist.empty or len(hist) < 50:
+            raise HTTPException(status_code=400, detail="Insufficient historical data for backtesting")
+        
+        closes = hist['Close'].values.tolist()
+        highs = hist['High'].values.tolist()
+        lows = hist['Low'].values.tolist()
+        dates = [d.strftime("%Y-%m-%d") for d in hist.index]
+        
+        trades = []
+        
+        if request.strategy in ['falling_knife', 'golden_setup', 'reverse_swings', 'godzilla', 'demon']:
+            lookback = 20
+            for i in range(lookback + 10, len(closes) - 5):
+                sma_20 = sum(closes[i-20:i]) / 20
+                sma_50 = sum(closes[max(0, i-50):i]) / max(1, min(50, i))
+                
+                gains, losses_arr = [], []
+                for j in range(1, min(14, i)):
+                    ch = closes[i-j+1] - closes[i-j]
+                    gains.append(max(ch, 0))
+                    losses_arr.append(abs(min(ch, 0)))
+                avg_g = sum(gains) / len(gains) if gains else 0
+                avg_l = sum(losses_arr) / len(losses_arr) if losses_arr else 0.01
+                rsi = 100 - (100 / (1 + (avg_g / avg_l))) if avg_l else 50
+                
+                signal = None
+                
+                if request.strategy == 'falling_knife':
+                    recent_high = max(highs[i-20:i])
+                    drop_pct = (recent_high - closes[i]) / recent_high * 100
+                    if drop_pct > 10 and rsi < 30:
+                        signal = "BUY"
+                
+                elif request.strategy == 'golden_setup':
+                    if closes[i] > sma_20 > sma_50 and rsi > 40 and rsi < 70:
+                        signal = "BUY"
+                    elif closes[i] < sma_20 < sma_50 and rsi > 30 and rsi < 60:
+                        signal = "SELL"
+                
+                elif request.strategy == 'reverse_swings':
+                    if rsi < 25 and closes[i] < sma_20:
+                        signal = "BUY"
+                    elif rsi > 75 and closes[i] > sma_20:
+                        signal = "SELL"
+                
+                elif request.strategy == 'godzilla':
+                    local_high = max(highs[i-5:i])
+                    if closes[i] > local_high and closes[i] > sma_20:
+                        signal = "BUY"
+                
+                elif request.strategy == 'demon':
+                    buy_signals = 0
+                    if closes[i] > sma_20: buy_signals += 1
+                    if closes[i] > sma_50: buy_signals += 1
+                    if rsi > 50: buy_signals += 1
+                    if closes[i] > closes[i-1]: buy_signals += 1
+                    if buy_signals >= 3:
+                        signal = "BUY"
+                    elif buy_signals <= 1:
+                        signal = "SELL"
+                
+                if signal and i + 5 < len(closes):
+                    entry_price = closes[i]
+                    exit_price = closes[i + 5]
+                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                    if signal == "SELL":
+                        pnl_pct = -pnl_pct
+                    trades.append(BacktestTradeResult(
+                        entry_date=dates[i],
+                        exit_date=dates[min(i + 5, len(dates) - 1)],
+                        entry_price=round(entry_price, 2),
+                        exit_price=round(exit_price, 2),
+                        pnl_pct=round(pnl_pct, 2),
+                        signal=signal
+                    ))
+        
+        if not trades:
+            return BacktestResponse(
+                ticker=request.ticker, strategy=request.strategy,
+                total_trades=0, winning_trades=0, losing_trades=0,
+                win_rate=0, avg_return=0, max_drawdown=0, total_return=0, trades=[]
+            )
+        
+        sampled = trades[::max(1, len(trades)//30)]
+        winning = [t for t in trades if t.pnl_pct > 0]
+        losing = [t for t in trades if t.pnl_pct <= 0]
+        returns = [t.pnl_pct for t in trades]
+        cumulative = []
+        c = 0
+        max_dd = 0
+        peak = 0
+        for r in returns:
+            c += r
+            cumulative.append(c)
+            if c > peak:
+                peak = c
+            dd = peak - c
+            if dd > max_dd:
+                max_dd = dd
+        
+        return BacktestResponse(
+            ticker=request.ticker,
+            strategy=request.strategy,
+            total_trades=len(trades),
+            winning_trades=len(winning),
+            losing_trades=len(losing),
+            win_rate=round(len(winning) / len(trades) * 100, 1),
+            avg_return=round(sum(returns) / len(returns), 2),
+            max_drawdown=round(max_dd, 2),
+            total_return=round(sum(returns), 2),
+            trades=sampled
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Backtest error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ======================= WEBSOCKET PRICE STREAM =======================
+
+active_ws_connections: Dict[str, List[WebSocket]] = {}
+
+@app.websocket("/ws/prices")
+async def websocket_price_stream(websocket: WebSocket):
+    """WebSocket endpoint for real-time price streaming"""
+    await websocket.accept()
+    subscribed_tickers = set()
+    try:
+        async def send_prices():
+            while True:
+                if subscribed_tickers:
+                    prices = {}
+                    for ticker in list(subscribed_tickers):
+                        try:
+                            ticker_obj = yf.Ticker(ticker)
+                            hist = ticker_obj.history(period="2d")
+                            if not hist.empty:
+                                current = hist['Close'].iloc[-1]
+                                prev = hist['Close'].iloc[-2] if len(hist) > 1 else current
+                                change_pct = ((current - prev) / prev * 100) if prev else 0
+                                prices[ticker] = {
+                                    "price": round(float(current), 2),
+                                    "change_pct": round(float(change_pct), 2),
+                                    "high": round(float(hist['High'].iloc[-1]), 2),
+                                    "low": round(float(hist['Low'].iloc[-1]), 2),
+                                    "volume": int(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0
+                                }
+                        except Exception:
+                            pass
+                    if prices:
+                        await websocket.send_json({"type": "prices", "data": prices, "timestamp": datetime.now(timezone.utc).isoformat()})
+                await asyncio.sleep(30)
+        
+        price_task = asyncio.create_task(send_prices())
+        
+        while True:
+            data = await websocket.receive_json()
+            if data.get("action") == "subscribe":
+                tickers = data.get("tickers", [])
+                subscribed_tickers.update(tickers)
+                await websocket.send_json({"type": "subscribed", "tickers": list(subscribed_tickers)})
+            elif data.get("action") == "unsubscribe":
+                tickers = data.get("tickers", [])
+                subscribed_tickers -= set(tickers)
+                await websocket.send_json({"type": "unsubscribed", "tickers": list(subscribed_tickers)})
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logging.error(f"WebSocket error: {e}")
+    finally:
+        try:
+            price_task.cancel()
+        except Exception:
+            pass
 
 
 app.include_router(api_router)
