@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 import math
 import asyncio
 import json
+import httpx
 import yfinance as yf
 import pandas as pd
 from nsepython import nse_optionchain_scrapper, nse_quote_ltp
@@ -3653,6 +3654,340 @@ async def run_backtest(request: BacktestRequest):
     except Exception as e:
         logging.error(f"Backtest error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ======================= CRYPTO (CoinGecko + Binance) =======================
+
+COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+
+CRYPTO_PAIRS = [
+    {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
+    {"id": "ethereum", "symbol": "ETH", "name": "Ethereum"},
+    {"id": "binancecoin", "symbol": "BNB", "name": "BNB"},
+    {"id": "solana", "symbol": "SOL", "name": "Solana"},
+    {"id": "ripple", "symbol": "XRP", "name": "XRP"},
+    {"id": "cardano", "symbol": "ADA", "name": "Cardano"},
+    {"id": "dogecoin", "symbol": "DOGE", "name": "Dogecoin"},
+    {"id": "polkadot", "symbol": "DOT", "name": "Polkadot"},
+    {"id": "avalanche-2", "symbol": "AVAX", "name": "Avalanche"},
+    {"id": "chainlink", "symbol": "LINK", "name": "Chainlink"},
+    {"id": "tron", "symbol": "TRX", "name": "TRON"},
+    {"id": "matic-network", "symbol": "MATIC", "name": "Polygon"},
+    {"id": "litecoin", "symbol": "LTC", "name": "Litecoin"},
+    {"id": "uniswap", "symbol": "UNI", "name": "Uniswap"},
+    {"id": "stellar", "symbol": "XLM", "name": "Stellar"},
+    {"id": "near", "symbol": "NEAR", "name": "NEAR Protocol"},
+    {"id": "aptos", "symbol": "APT", "name": "Aptos"},
+    {"id": "sui", "symbol": "SUI", "name": "Sui"},
+    {"id": "pepe", "symbol": "PEPE", "name": "Pepe"},
+    {"id": "shiba-inu", "symbol": "SHIB", "name": "Shiba Inu"},
+]
+
+async def _coingecko_get(path: str, params: dict = None, cache_ttl: int = 120):
+    """Helper to make CoinGecko API calls with caching and rate-limit handling."""
+    cache_key = f"cg_{path}_{json.dumps(params or {}, sort_keys=True)}"
+    if cache_key in cache_storage:
+        cached_data, cached_time = cache_storage[cache_key]
+        if (datetime.now() - cached_time).seconds < cache_ttl:
+            return cached_data
+    async with httpx.AsyncClient(timeout=15) as client_http:
+        resp = await client_http.get(f"{COINGECKO_BASE}{path}", params=params or {})
+        if resp.status_code == 429:
+            # Return stale cache if available
+            if cache_key in cache_storage:
+                return cache_storage[cache_key][0]
+            raise HTTPException(status_code=429, detail="CoinGecko rate limit. Thodi der baad try karo.")
+        resp.raise_for_status()
+        data = resp.json()
+    cache_storage[cache_key] = (data, datetime.now())
+    return data
+
+
+@api_router.get("/crypto/search")
+async def crypto_search(q: str = Query(..., min_length=1)):
+    """Search crypto coins"""
+    q_upper = q.upper()
+    results = [p for p in CRYPTO_PAIRS if q_upper in p["symbol"] or q_upper in p["name"].upper()]
+    if not results:
+        try:
+            data = await _coingecko_get("/search", {"query": q})
+            coins = data.get("coins", [])[:10]
+            results = [{"id": c["id"], "symbol": c["symbol"].upper(), "name": c["name"]} for c in coins]
+        except Exception:
+            pass
+    return {"results": results[:15]}
+
+
+@api_router.get("/crypto/prices")
+async def get_crypto_prices():
+    """Get live prices for top crypto pairs"""
+    try:
+        ids = ",".join([p["id"] for p in CRYPTO_PAIRS])
+        data = await _coingecko_get("/coins/markets", {
+            "vs_currency": "usd",
+            "ids": ids,
+            "order": "market_cap_desc",
+            "per_page": 50,
+            "page": 1,
+            "sparkline": "true",
+            "price_change_percentage": "1h,24h,7d"
+        })
+        coins = []
+        for coin in data:
+            coins.append({
+                "id": coin["id"],
+                "symbol": coin.get("symbol", "").upper(),
+                "name": coin.get("name", ""),
+                "image": coin.get("image", ""),
+                "current_price": coin.get("current_price"),
+                "market_cap": coin.get("market_cap"),
+                "market_cap_rank": coin.get("market_cap_rank"),
+                "total_volume": coin.get("total_volume"),
+                "price_change_24h": coin.get("price_change_24h"),
+                "price_change_pct_24h": coin.get("price_change_percentage_24h"),
+                "price_change_pct_1h": coin.get("price_change_percentage_1h_in_currency"),
+                "price_change_pct_7d": coin.get("price_change_percentage_7d_in_currency"),
+                "high_24h": coin.get("high_24h"),
+                "low_24h": coin.get("low_24h"),
+                "ath": coin.get("ath"),
+                "ath_change_pct": coin.get("ath_change_percentage"),
+                "circulating_supply": coin.get("circulating_supply"),
+                "total_supply": coin.get("total_supply"),
+                "sparkline_7d": coin.get("sparkline_in_7d", {}).get("price", []),
+            })
+        return {"coins": coins, "updated_at": datetime.now(timezone.utc).isoformat()}
+    except httpx.HTTPStatusError as e:
+        logging.error(f"CoinGecko API error: {e}")
+        raise HTTPException(status_code=502, detail="CoinGecko API rate limit ya error. Thodi der baad try karo.")
+    except Exception as e:
+        logging.error(f"Crypto prices error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/crypto/chart/{coin_id}")
+async def get_crypto_chart(coin_id: str, days: int = Query(default=1, ge=1, le=365)):
+    """Get OHLC chart data for a crypto coin"""
+    try:
+        data = await _coingecko_get(f"/coins/{coin_id}/ohlc", {
+            "vs_currency": "usd",
+            "days": str(days)
+        })
+        bars = []
+        for candle in data:
+            bars.append({
+                "timestamp": candle[0],
+                "open": candle[1],
+                "high": candle[2],
+                "low": candle[3],
+                "close": candle[4],
+            })
+        return {"coin_id": coin_id, "days": days, "bars": bars}
+    except httpx.HTTPStatusError:
+        raise HTTPException(status_code=502, detail="CoinGecko API error")
+    except Exception as e:
+        logging.error(f"Crypto chart error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/crypto/market-overview")
+async def crypto_market_overview():
+    """Get crypto market overview - global data + top gainers/losers"""
+    try:
+        global_data = await _coingecko_get("/global", cache_ttl=300)
+        gd = global_data.get("data", {})
+
+        # Try to use cached prices data first
+        market_data = None
+        for k, v in cache_storage.items():
+            if k.startswith("cg_/coins/markets_") and "sparkline" in k:
+                market_data = v[0]
+                break
+
+        if not market_data:
+            try:
+                ids = ",".join([p["id"] for p in CRYPTO_PAIRS])
+                market_data = await _coingecko_get("/coins/markets", {
+                    "vs_currency": "usd",
+                    "ids": ids,
+                    "order": "market_cap_desc",
+                    "per_page": 20,
+                    "page": 1,
+                    "price_change_percentage": "24h"
+                }, cache_ttl=180)
+            except Exception:
+                market_data = []
+
+        sorted_by_change = sorted(market_data, key=lambda x: x.get("price_change_percentage_24h") or 0)
+        losers = [{
+            "id": c["id"], "symbol": c.get("symbol", "").upper(), "name": c.get("name"),
+            "price": c.get("current_price"), "change_pct": c.get("price_change_percentage_24h"),
+            "image": c.get("image"),
+        } for c in sorted_by_change[:5]]
+        gainers = [{
+            "id": c["id"], "symbol": c.get("symbol", "").upper(), "name": c.get("name"),
+            "price": c.get("current_price"), "change_pct": c.get("price_change_percentage_24h"),
+            "image": c.get("image"),
+        } for c in reversed(sorted_by_change[-5:])]
+
+        return {
+            "total_market_cap": gd.get("total_market_cap", {}).get("usd"),
+            "total_volume": gd.get("total_volume", {}).get("usd"),
+            "btc_dominance": gd.get("market_cap_percentage", {}).get("btc"),
+            "eth_dominance": gd.get("market_cap_percentage", {}).get("eth"),
+            "active_coins": gd.get("active_cryptocurrencies"),
+            "market_cap_change_pct_24h": gd.get("market_cap_change_percentage_24h_usd"),
+            "top_gainers": gainers,
+            "top_losers": losers,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Market overview error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/crypto/detail/{coin_id}")
+async def get_crypto_detail(coin_id: str):
+    """Get detailed info for a specific crypto coin"""
+    try:
+        data = await _coingecko_get(f"/coins/{coin_id}", {
+            "localization": "false",
+            "tickers": "false",
+            "community_data": "false",
+            "developer_data": "false"
+        })
+        md = data.get("market_data", {})
+        return {
+            "id": data.get("id"),
+            "symbol": data.get("symbol", "").upper(),
+            "name": data.get("name"),
+            "image": data.get("image", {}).get("large"),
+            "description": (data.get("description", {}).get("en", "") or "")[:500],
+            "current_price": md.get("current_price", {}).get("usd"),
+            "market_cap": md.get("market_cap", {}).get("usd"),
+            "market_cap_rank": md.get("market_cap_rank"),
+            "total_volume": md.get("total_volume", {}).get("usd"),
+            "high_24h": md.get("high_24h", {}).get("usd"),
+            "low_24h": md.get("low_24h", {}).get("usd"),
+            "price_change_24h": md.get("price_change_24h"),
+            "price_change_pct_24h": md.get("price_change_percentage_24h"),
+            "price_change_pct_7d": md.get("price_change_percentage_7d"),
+            "price_change_pct_30d": md.get("price_change_percentage_30d"),
+            "ath": md.get("ath", {}).get("usd"),
+            "ath_change_pct": md.get("ath_change_percentage", {}).get("usd"),
+            "atl": md.get("atl", {}).get("usd"),
+            "circulating_supply": md.get("circulating_supply"),
+            "total_supply": md.get("total_supply"),
+            "max_supply": md.get("max_supply"),
+        }
+    except Exception as e:
+        logging.error(f"Crypto detail error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.post("/crypto/analyze")
+async def crypto_gpt_analyze(coin_id: str = Query(...), symbol: str = Query(...)):
+    """GPT-based analysis for a crypto coin"""
+    try:
+        chart_data = await _coingecko_get(f"/coins/{coin_id}/ohlc", {"vs_currency": "usd", "days": "30"})
+        detail = await _coingecko_get(f"/coins/{coin_id}", {
+            "localization": "false", "tickers": "false",
+            "community_data": "false", "developer_data": "false"
+        })
+        md = detail.get("market_data", {})
+        current_price = md.get("current_price", {}).get("usd", 0)
+
+        if chart_data and len(chart_data) > 10:
+            closes = [c[4] for c in chart_data[-30:]]
+            highs = [c[2] for c in chart_data[-30:]]
+            lows = [c[3] for c in chart_data[-30:]]
+            sma_10 = sum(closes[-10:]) / 10 if len(closes) >= 10 else current_price
+            sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else current_price
+            high_30 = max(highs) if highs else current_price
+            low_30 = min(lows) if lows else current_price
+            gains, loss_list = [], []
+            for i in range(1, min(14, len(closes))):
+                ch = closes[i] - closes[i-1]
+                gains.append(max(ch, 0))
+                loss_list.append(abs(min(ch, 0)))
+            ag = sum(gains) / len(gains) if gains else 0
+            al = sum(loss_list) / len(loss_list) if loss_list else 0.01
+            rsi = 100 - (100 / (1 + (ag / al))) if al else 50
+        else:
+            sma_10 = sma_20 = current_price
+            high_30 = low_30 = current_price
+            rsi = 50
+
+        prompt_text = f"""Analyze this cryptocurrency for a trade setup:
+Coin: {symbol.upper()} ({detail.get('name', coin_id)})
+Current Price: ${current_price:,.2f}
+SMA10: ${sma_10:,.2f} | SMA20: ${sma_20:,.2f}
+RSI(14): {rsi:.1f}
+30d High: ${high_30:,.2f} | 30d Low: ${low_30:,.2f}
+24h Change: {md.get('price_change_percentage_24h', 0):.2f}%
+7d Change: {md.get('price_change_percentage_7d', 0):.2f}%
+Market Cap Rank: #{md.get('market_cap_rank', 'N/A')}
+ATH: ${md.get('ath', {}).get('usd', 0):,.2f} (ATH Change: {md.get('ath_change_percentage', {}).get('usd', 0):.1f}%)
+
+Provide a JSON response:
+- direction: "Long" or "Short"
+- entry_price: specific price as string
+- stoploss: specific price as string
+- targets: array of 3 target prices as strings
+- reason: 2-3 sentence analysis with key crypto market factors
+- confidence: integer 1-100
+- key_levels: array of important price levels as strings
+- risk_reward: ratio as string
+Return ONLY valid JSON."""
+
+        emergent_key = os.environ.get('EMERGENT_LLM_KEY')
+        if not emergent_key:
+            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+
+        chat = LlmChat(
+            api_key=emergent_key,
+            session_id=f"crypto-analyze-{coin_id}-{uuid.uuid4().hex[:8]}",
+            system_message="You are an expert crypto trader. Always respond with valid JSON only."
+        )
+        chat.with_model("anthropic", "claude-sonnet-4-5")
+        response_text = await chat.send_message(UserMessage(text=prompt_text))
+
+        try:
+            cleaned = response_text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+                cleaned = cleaned.rsplit("```", 1)[0]
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            parsed = {
+                "direction": "Long" if rsi < 50 else "Short",
+                "entry_price": f"{current_price:,.2f}",
+                "stoploss": f"{current_price * 0.95:,.2f}" if rsi < 50 else f"{current_price * 1.05:,.2f}",
+                "targets": [f"{current_price * 1.05:,.2f}", f"{current_price * 1.10:,.2f}", f"{current_price * 1.15:,.2f}"],
+                "reason": response_text[:300],
+                "confidence": 55,
+                "key_levels": [f"{low_30:,.2f}", f"{high_30:,.2f}"],
+                "risk_reward": "1:2"
+            }
+
+        return {
+            "coin_id": coin_id,
+            "symbol": symbol.upper(),
+            "direction": parsed.get("direction", "Long"),
+            "entry_price": str(parsed.get("entry_price", "")),
+            "stoploss": str(parsed.get("stoploss", "")),
+            "targets": [str(t) for t in parsed.get("targets", [])],
+            "reason": str(parsed.get("reason", "")),
+            "confidence": int(parsed.get("confidence", 55)),
+            "key_levels": [str(l) for l in parsed.get("key_levels", [])],
+            "risk_reward": str(parsed.get("risk_reward", "1:2")),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Crypto GPT analysis error: {e}")
+        raise HTTPException(status_code=500, detail=f"Crypto analysis failed: {str(e)}")
 
 
 # ======================= WEBSOCKET PRICE STREAM =======================

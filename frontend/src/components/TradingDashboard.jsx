@@ -19,8 +19,9 @@ import PortfolioTracker from './PortfolioTracker';
 import AlertSystem from './AlertSystem';
 import GPTAnalysis from './GPTAnalysis';
 import BacktestModule from './BacktestModule';
+import CryptoDashboard from './CryptoDashboard';
 import { Toaster, toast } from 'sonner';
-import { Star, Wallet, Bell, ChartLineUp, List } from '@phosphor-icons/react';
+import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc } from '@phosphor-icons/react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -139,6 +140,7 @@ const TradingDashboard = () => {
     { id: 'strategies', label: 'STRATEGIES' },
     { id: 'ghost', label: 'GHOST' },
     { id: 'backtest', label: 'BACKTEST' },
+    { id: 'crypto', label: 'CRYPTO' },
     { id: 'tools', label: 'TOOLS' },
   ];
 
@@ -289,6 +291,10 @@ const TradingDashboard = () => {
 
             {activeTab === 'backtest' && (
               <BacktestModule selectedStock={selectedStock} />
+            )}
+
+            {activeTab === 'crypto' && (
+              <CryptoDashboard />
             )}
 
             {activeTab === 'tools' && (
