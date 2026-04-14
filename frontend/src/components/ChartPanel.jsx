@@ -4,7 +4,7 @@ import { ChartLine, TrendUp, TrendDown, PencilLine, Trash } from '@phosphor-icon
 
 const ChartPanel = ({
   stockData, loading, selectedStock, onPivotSelect, pivotPoint, gannFan,
-  semiLogScale, setSemiLogScale, timeframe, onTimeframeChange
+  semiLogScale, setSemiLogScale, timeframe, onTimeframeChange, isCrypto
 }) => {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
@@ -274,7 +274,7 @@ const ChartPanel = ({
         {!loading && !stockData && (
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <ChartLine size={48} className="text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-500">Select a stock to view chart</p>
+            <p className="text-sm text-zinc-500">Select a stock or crypto to view chart</p>
             <p className="text-[10px] text-zinc-600 mt-1 font-mono">Scroll to zoom / Drag to pan</p>
           </div>
         )}

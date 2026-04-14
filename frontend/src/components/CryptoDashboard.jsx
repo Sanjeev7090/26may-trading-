@@ -204,7 +204,7 @@ const CryptoAIAnalysis = ({ coinId, symbol }) => {
 };
 
 // ---- Main CryptoDashboard ----
-const CryptoDashboard = () => {
+const CryptoDashboard = ({ preSelectedCoin }) => {
   const [coins, setCoins] = useState([]);
   const [overview, setOverview] = useState(null);
   const [selectedCoin, setSelectedCoin] = useState(null);
@@ -213,6 +213,34 @@ const CryptoDashboard = () => {
   const [searchQ, setSearchQ] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [view, setView] = useState('table'); // 'table' | 'detail'
+
+  // If preSelectedCoin is passed (from left sidebar crypto selection), show detail directly
+  useEffect(() => {
+    if (preSelectedCoin && preSelectedCoin.type === 'CRYPTO') {
+      const coin = {
+        id: preSelectedCoin.coin_id,
+        symbol: preSelectedCoin.symbol,
+        name: preSelectedCoin.name,
+        image: preSelectedCoin.image,
+        current_price: preSelectedCoin.current_price,
+        price_change_pct_24h: preSelectedCoin.price_change_pct_24h,
+        market_cap: preSelectedCoin.market_cap,
+        high_24h: preSelectedCoin.high_24h,
+        low_24h: preSelectedCoin.low_24h,
+        ath: preSelectedCoin.ath,
+        ath_change_pct: preSelectedCoin.ath_change_pct,
+        price_change_pct_7d: preSelectedCoin.price_change_pct_7d,
+        total_volume: preSelectedCoin.total_volume,
+      };
+      setSelectedCoin(coin);
+      setCoinDetail(coin);
+      setView('detail');
+      // Try to get extended detail
+      axios.get(`${API}/crypto/detail/${coin.id}`).then(r => {
+        setCoinDetail(prev => ({ ...prev, ...r.data }));
+      }).catch(() => {});
+    }
+  }, [preSelectedCoin]);
 
   const fetchPrices = useCallback(async () => {
     try {
@@ -285,6 +313,88 @@ const CryptoDashboard = () => {
 
   return (
     <div className="flex flex-col h-full" data-testid="crypto-dashboard">
+      {/* If pre-selected from left sidebar, show compact detail only (chart is in center) */}
+      {preSelectedCoin && view === 'detail' && selectedCoin && (
+        <div className="p-3 space-y-3 overflow-y-auto" data-testid="crypto-sidebar-detail">
+          {/* Coin Header */}
+          <div className="flex items-center gap-3">
+            {(coinDetail?.image || selectedCoin?.image) && (
+              <img src={coinDetail?.image || selectedCoin?.image} alt="" className="w-7 h-7 rounded-full" />
+            )}
+            <div>
+              <h2 className="text-sm font-black text-white flex items-center gap-2">
+                {coinDetail?.name || selectedCoin?.name}
+                <span className="text-zinc-500 text-[10px] font-mono">{(coinDetail?.symbol || selectedCoin?.symbol)?.toUpperCase()}</span>
+                {coinDetail?.market_cap_rank && (
+                  <span className="text-[8px] bg-white/10 px-1 py-0.5 rounded text-zinc-400">#{coinDetail.market_cap_rank}</span>
+                )}
+              </h2>
+              <div className="flex items-center gap-2">
+                <span className="text-base font-black text-white font-mono" data-testid="crypto-detail-price">
+                  {fmtPrice(coinDetail?.current_price)}
+                </span>
+                {coinDetail?.price_change_pct_24h != null && (
+                  <span className={`text-[10px] font-bold ${coinDetail.price_change_pct_24h >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {coinDetail.price_change_pct_24h >= 0 ? <CaretUp size={9} weight="bold" className="inline" /> : <CaretDown size={9} weight="bold" className="inline" />}
+                    {Math.abs(coinDetail.price_change_pct_24h).toFixed(2)}%
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Stats Grid */}
+          {coinDetail && (
+            <div className="grid grid-cols-2 gap-1.5" data-testid="crypto-detail-stats">
+              {[
+                { label: '24h High', value: fmtPrice(coinDetail.high_24h), color: 'text-emerald-400' },
+                { label: '24h Low', value: fmtPrice(coinDetail.low_24h), color: 'text-red-400' },
+                { label: 'ATH', value: fmtPrice(coinDetail.ath), color: 'text-yellow-400' },
+                { label: 'ATH %', value: fmtPct(coinDetail.ath_change_pct), color: (coinDetail.ath_change_pct || 0) >= 0 ? 'text-emerald-400' : 'text-red-400' },
+                { label: 'Market Cap', value: fmtMcap(coinDetail.market_cap), color: 'text-white' },
+                { label: 'Volume', value: fmtMcap(coinDetail.total_volume), color: 'text-white' },
+                { label: '7d', value: fmtPct(coinDetail.price_change_pct_7d), color: (coinDetail.price_change_pct_7d || 0) >= 0 ? 'text-emerald-400' : 'text-red-400' },
+                { label: '30d', value: fmtPct(coinDetail.price_change_pct_30d), color: (coinDetail.price_change_pct_30d || 0) >= 0 ? 'text-emerald-400' : 'text-red-400' },
+              ].map(s => (
+                <div key={s.label} className="bg-white/5 rounded p-1.5">
+                  <span className="text-[8px] text-zinc-500 uppercase block">{s.label}</span>
+                  <span className={`text-[10px] font-mono font-bold ${s.color}`}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Supply Info */}
+          {coinDetail && (coinDetail.circulating_supply || coinDetail.total_supply) && (
+            <div className="flex gap-2 text-[9px] text-zinc-400 flex-wrap">
+              {coinDetail.circulating_supply && (
+                <span>Circ: <span className="text-white font-mono">{(coinDetail.circulating_supply / 1e6).toFixed(1)}M</span></span>
+              )}
+              {coinDetail.total_supply && (
+                <span>Total: <span className="text-white font-mono">{(coinDetail.total_supply / 1e6).toFixed(1)}M</span></span>
+              )}
+              {coinDetail.max_supply && (
+                <span>Max: <span className="text-white font-mono">{(coinDetail.max_supply / 1e6).toFixed(1)}M</span></span>
+              )}
+            </div>
+          )}
+
+          {/* AI Analysis */}
+          <CryptoAIAnalysis coinId={selectedCoin.id} symbol={selectedCoin.symbol || ''} />
+
+          {/* Description */}
+          {coinDetail?.description && (
+            <div className="bg-white/5 rounded p-2">
+              <span className="text-[8px] text-zinc-500 uppercase block mb-1">About</span>
+              <p className="text-[9px] text-zinc-400 leading-relaxed" dangerouslySetInnerHTML={{ __html: coinDetail.description }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Full standalone mode (no preSelectedCoin) */}
+      {!preSelectedCoin && (
+        <>
       {/* Market Overview Bar */}
       {overview && (
         <div className="border-b border-white/10 px-3 py-2 flex flex-wrap gap-3 text-[10px] bg-[#0D0D0D]" data-testid="crypto-market-bar">
@@ -525,6 +635,8 @@ const CryptoDashboard = () => {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 };

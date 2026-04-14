@@ -3552,33 +3552,103 @@ def _build_daily_summary(trades):
     return summaries
 
 
+COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+
+CRYPTO_PAIRS = [
+    {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
+    {"id": "ethereum", "symbol": "ETH", "name": "Ethereum"},
+    {"id": "binancecoin", "symbol": "BNB", "name": "BNB"},
+    {"id": "solana", "symbol": "SOL", "name": "Solana"},
+    {"id": "ripple", "symbol": "XRP", "name": "XRP"},
+    {"id": "cardano", "symbol": "ADA", "name": "Cardano"},
+    {"id": "dogecoin", "symbol": "DOGE", "name": "Dogecoin"},
+    {"id": "polkadot", "symbol": "DOT", "name": "Polkadot"},
+    {"id": "avalanche-2", "symbol": "AVAX", "name": "Avalanche"},
+    {"id": "chainlink", "symbol": "LINK", "name": "Chainlink"},
+    {"id": "tron", "symbol": "TRX", "name": "TRON"},
+    {"id": "matic-network", "symbol": "MATIC", "name": "Polygon"},
+    {"id": "litecoin", "symbol": "LTC", "name": "Litecoin"},
+    {"id": "uniswap", "symbol": "UNI", "name": "Uniswap"},
+    {"id": "stellar", "symbol": "XLM", "name": "Stellar"},
+    {"id": "near", "symbol": "NEAR", "name": "NEAR Protocol"},
+    {"id": "aptos", "symbol": "APT", "name": "Aptos"},
+    {"id": "sui", "symbol": "SUI", "name": "Sui"},
+    {"id": "pepe", "symbol": "PEPE", "name": "Pepe"},
+    {"id": "shiba-inu", "symbol": "SHIB", "name": "Shiba Inu"},
+]
+
+async def _coingecko_get(path: str, params: dict = None, cache_ttl: int = 120):
+    """Helper to make CoinGecko API calls with caching and rate-limit handling."""
+    cache_key = f"cg_{path}_{json.dumps(params or {}, sort_keys=True)}"
+    if cache_key in cache_storage:
+        cached_data, cached_time = cache_storage[cache_key]
+        if (datetime.now() - cached_time).seconds < cache_ttl:
+            return cached_data
+    async with httpx.AsyncClient(timeout=15) as client_http:
+        resp = await client_http.get(f"{COINGECKO_BASE}{path}", params=params or {})
+        if resp.status_code == 429:
+            if cache_key in cache_storage:
+                return cache_storage[cache_key][0]
+            raise HTTPException(status_code=429, detail="CoinGecko rate limit. Thodi der baad try karo.")
+        resp.raise_for_status()
+        data = resp.json()
+    cache_storage[cache_key] = (data, datetime.now())
+    return data
+
+CRYPTO_IDS = {p["id"] for p in CRYPTO_PAIRS}
+
+async def _fetch_crypto_ohlc_for_backtest(coin_id: str, days: int):
+    """Fetch OHLC data from CoinGecko and return closes/highs/lows/dates lists."""
+    data = await _coingecko_get(f"/coins/{coin_id}/ohlc", {
+        "vs_currency": "usd",
+        "days": str(days)
+    }, cache_ttl=300)
+    if not data or len(data) < 20:
+        return None, None, None, None
+    closes = [c[4] for c in data]
+    highs = [c[2] for c in data]
+    lows = [c[3] for c in data]
+    dates = [datetime.fromtimestamp(c[0]/1000).strftime("%Y-%m-%d %H:%M") for c in data]
+    return closes, highs, lows, dates
+
+
 @api_router.post("/backtest", response_model=BacktestResponse)
 async def run_backtest(request: BacktestRequest):
     """Advanced backtest with intraday/daily/weekly data. Targets ~10 trades/day, 80%+ win rate."""
     try:
-        ticker_obj = yf.Ticker(request.ticker)
+        is_crypto = request.ticker.lower() in CRYPTO_IDS
+
+        if is_crypto:
+            # Fetch crypto OHLC from CoinGecko
+            coin_id = request.ticker.lower()
+            closes, highs, lows, dates = await _fetch_crypto_ohlc_for_backtest(coin_id, request.days)
+            if closes is None or len(closes) < 20:
+                raise HTTPException(status_code=400, detail="Insufficient crypto data for backtesting")
+        else:
+            # Fetch stock data from yfinance
+            ticker_obj = yf.Ticker(request.ticker)
         
-        # Choose data resolution based on timeframe
-        if request.timeframe == 'intraday':
-            # Use 30m data for intraday (more bars = more trades per day)
-            max_days = min(request.days, 59)
-            hist = ticker_obj.history(period=f"{max_days}d", interval="30m")
-            if hist.empty or len(hist) < 30:
-                hist = ticker_obj.history(period=f"{max_days}d", interval="1h")
-            if hist.empty or len(hist) < 30:
+            # Choose data resolution based on timeframe
+            if request.timeframe == 'intraday':
+                # Use 30m data for intraday (more bars = more trades per day)
+                max_days = min(request.days, 59)
+                hist = ticker_obj.history(period=f"{max_days}d", interval="30m")
+                if hist.empty or len(hist) < 30:
+                    hist = ticker_obj.history(period=f"{max_days}d", interval="1h")
+                if hist.empty or len(hist) < 30:
+                    hist = ticker_obj.history(period=f"{request.days}d", interval="1d")
+            elif request.timeframe == 'short_term':
                 hist = ticker_obj.history(period=f"{request.days}d", interval="1d")
-        elif request.timeframe == 'short_term':
-            hist = ticker_obj.history(period=f"{request.days}d", interval="1d")
-        else:  # mid_term
-            hist = ticker_obj.history(period=f"{request.days}d", interval="1wk")
+            else:  # mid_term
+                hist = ticker_obj.history(period=f"{request.days}d", interval="1wk")
         
-        if hist.empty or len(hist) < 20:
-            raise HTTPException(status_code=400, detail="Insufficient data for backtesting")
+            if hist.empty or len(hist) < 20:
+                raise HTTPException(status_code=400, detail="Insufficient data for backtesting")
         
-        closes = hist['Close'].values.tolist()
-        highs = hist['High'].values.tolist()
-        lows = hist['Low'].values.tolist()
-        dates = [d.strftime("%Y-%m-%d %H:%M") if hasattr(d, 'strftime') else str(d) for d in hist.index]
+            closes = hist['Close'].values.tolist()
+            highs = hist['High'].values.tolist()
+            lows = hist['Low'].values.tolist()
+            dates = [d.strftime("%Y-%m-%d %H:%M") if hasattr(d, 'strftime') else str(d) for d in hist.index]
         
         max_exit_bars = 8 if request.timeframe == 'intraday' else 6
         
@@ -3658,50 +3728,6 @@ async def run_backtest(request: BacktestRequest):
 
 # ======================= CRYPTO (CoinGecko + Binance) =======================
 
-COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-
-CRYPTO_PAIRS = [
-    {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
-    {"id": "ethereum", "symbol": "ETH", "name": "Ethereum"},
-    {"id": "binancecoin", "symbol": "BNB", "name": "BNB"},
-    {"id": "solana", "symbol": "SOL", "name": "Solana"},
-    {"id": "ripple", "symbol": "XRP", "name": "XRP"},
-    {"id": "cardano", "symbol": "ADA", "name": "Cardano"},
-    {"id": "dogecoin", "symbol": "DOGE", "name": "Dogecoin"},
-    {"id": "polkadot", "symbol": "DOT", "name": "Polkadot"},
-    {"id": "avalanche-2", "symbol": "AVAX", "name": "Avalanche"},
-    {"id": "chainlink", "symbol": "LINK", "name": "Chainlink"},
-    {"id": "tron", "symbol": "TRX", "name": "TRON"},
-    {"id": "matic-network", "symbol": "MATIC", "name": "Polygon"},
-    {"id": "litecoin", "symbol": "LTC", "name": "Litecoin"},
-    {"id": "uniswap", "symbol": "UNI", "name": "Uniswap"},
-    {"id": "stellar", "symbol": "XLM", "name": "Stellar"},
-    {"id": "near", "symbol": "NEAR", "name": "NEAR Protocol"},
-    {"id": "aptos", "symbol": "APT", "name": "Aptos"},
-    {"id": "sui", "symbol": "SUI", "name": "Sui"},
-    {"id": "pepe", "symbol": "PEPE", "name": "Pepe"},
-    {"id": "shiba-inu", "symbol": "SHIB", "name": "Shiba Inu"},
-]
-
-async def _coingecko_get(path: str, params: dict = None, cache_ttl: int = 120):
-    """Helper to make CoinGecko API calls with caching and rate-limit handling."""
-    cache_key = f"cg_{path}_{json.dumps(params or {}, sort_keys=True)}"
-    if cache_key in cache_storage:
-        cached_data, cached_time = cache_storage[cache_key]
-        if (datetime.now() - cached_time).seconds < cache_ttl:
-            return cached_data
-    async with httpx.AsyncClient(timeout=15) as client_http:
-        resp = await client_http.get(f"{COINGECKO_BASE}{path}", params=params or {})
-        if resp.status_code == 429:
-            # Return stale cache if available
-            if cache_key in cache_storage:
-                return cache_storage[cache_key][0]
-            raise HTTPException(status_code=429, detail="CoinGecko rate limit. Thodi der baad try karo.")
-        resp.raise_for_status()
-        data = resp.json()
-    cache_storage[cache_key] = (data, datetime.now())
-    return data
-
 
 @api_router.get("/crypto/search")
 async def crypto_search(q: str = Query(..., min_length=1)):
@@ -3731,7 +3757,7 @@ async def get_crypto_prices():
             "page": 1,
             "sparkline": "true",
             "price_change_percentage": "1h,24h,7d"
-        })
+        }, cache_ttl=600)
         coins = []
         for coin in data:
             coins.append({
@@ -3758,10 +3784,12 @@ async def get_crypto_prices():
         return {"coins": coins, "updated_at": datetime.now(timezone.utc).isoformat()}
     except httpx.HTTPStatusError as e:
         logging.error(f"CoinGecko API error: {e}")
-        raise HTTPException(status_code=502, detail="CoinGecko API rate limit ya error. Thodi der baad try karo.")
+        return {"coins": [], "updated_at": datetime.now(timezone.utc).isoformat(), "error": "Rate limited"}
+    except HTTPException:
+        return {"coins": [], "updated_at": datetime.now(timezone.utc).isoformat(), "error": "Rate limited"}
     except Exception as e:
         logging.error(f"Crypto prices error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"coins": [], "updated_at": datetime.now(timezone.utc).isoformat(), "error": str(e)}
 
 
 @api_router.get("/crypto/chart/{coin_id}")

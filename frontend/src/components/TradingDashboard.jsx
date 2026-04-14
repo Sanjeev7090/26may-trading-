@@ -19,6 +19,7 @@ import PortfolioTracker from './PortfolioTracker';
 import AlertSystem from './AlertSystem';
 import GPTAnalysis from './GPTAnalysis';
 import BacktestModule from './BacktestModule';
+import CryptoList from './CryptoList';
 import CryptoDashboard from './CryptoDashboard';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc } from '@phosphor-icons/react';
@@ -38,6 +39,7 @@ const TradingDashboard = () => {
   const [activeTab, setActiveTab] = useState('strategies');
   const [leftTab, setLeftTab] = useState('search');
   const [mobilePanel, setMobilePanel] = useState('chart');
+  const [cryptoChartDays, setCryptoChartDays] = useState(7);
   const wsRef = useRef(null);
 
   // WebSocket connection for real-time prices
@@ -78,6 +80,29 @@ const TradingDashboard = () => {
     }
   };
 
+  // Fetch crypto chart data and convert to stockData format
+  const fetchCryptoData = async (coinId, days) => {
+    setLoading(true);
+    try {
+      const response = await axios.get(`${API}/crypto/chart/${coinId}?days=${days}`);
+      const bars = (response.data.bars || []).map(b => ({
+        timestamp: b.timestamp,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+        volume: 0,
+      }));
+      setStockData({ ticker: coinId.toUpperCase(), bars });
+    } catch (error) {
+      if (error?.response?.status !== 429) {
+        toast.error('Failed to load crypto chart');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleStockSelect = (stock) => {
     setStockData(null);
     setPivotPoint(null);
@@ -91,13 +116,32 @@ const TradingDashboard = () => {
     setMobilePanel('chart');
   };
 
+  const handleCryptoSelect = (crypto) => {
+    setStockData(null);
+    setPivotPoint(null);
+    setGannFan(null);
+    setSignal(null);
+    setSelectedStock(crypto);
+    setCryptoChartDays(7);
+    fetchCryptoData(crypto.coin_id, 7);
+    setMobilePanel('chart');
+  };
+
   const handleTimeframeChange = (tf) => {
     setTimeframe(tf);
     if (selectedStock) {
       setPivotPoint(null);
       setGannFan(null);
       setSignal(null);
-      fetchStockData(selectedStock.ticker, tf);
+      if (selectedStock.type === 'CRYPTO') {
+        // Map timeframe to crypto days
+        const daysMap = { '10M': 1, '30M': 1, '1H': 1, '4H': 1, '1D': 7, '1W': 30, '1M': 30, '6M': 180, '1Y': 365 };
+        const days = daysMap[tf.label] || 7;
+        setCryptoChartDays(days);
+        fetchCryptoData(selectedStock.coin_id, days);
+      } else {
+        fetchStockData(selectedStock.ticker, tf);
+      }
     }
   };
 
@@ -120,7 +164,7 @@ const TradingDashboard = () => {
   };
 
   const fetchSignal = async (pivot) => {
-    if (!selectedStock || !pivot) return;
+    if (!selectedStock || !pivot || selectedStock.type === 'CRYPTO') return;
     try {
       const response = await axios.get(`${API}/signal/${selectedStock.ticker}`, {
         params: { pivot_price: pivot.price, pivot_timestamp: pivot.timestamp }
@@ -130,22 +174,24 @@ const TradingDashboard = () => {
   };
 
   useEffect(() => {
-    if (pivotPoint && selectedStock) {
+    if (pivotPoint && selectedStock && selectedStock.type !== 'CRYPTO') {
       const interval = setInterval(() => fetchSignal(pivotPoint), 60000);
       return () => clearInterval(interval);
     }
   }, [pivotPoint, selectedStock]);
 
+  const isCrypto = selectedStock?.type === 'CRYPTO';
+
   const rightTabs = [
     { id: 'strategies', label: 'STRATEGIES' },
     { id: 'ghost', label: 'GHOST' },
     { id: 'backtest', label: 'BACKTEST' },
-    { id: 'crypto', label: 'CRYPTO' },
     { id: 'tools', label: 'TOOLS' },
   ];
 
   const leftTabs = [
     { id: 'search', label: 'Search' },
+    { id: 'crypto', label: 'Crypto', icon: CurrencyBtc },
     { id: 'watchlist', label: 'Watchlist', icon: Star },
     { id: 'portfolio', label: 'Portfolio', icon: Wallet },
     { id: 'alerts', label: 'Alerts', icon: Bell },
@@ -168,12 +214,19 @@ const TradingDashboard = () => {
             <span className="text-white">GANN</span>
             <span className="text-[#00E676] ml-1">TRADER</span>
           </h1>
-          <span className="hidden sm:inline text-[10px] text-zinc-500 font-mono tracking-wider border border-white/10 px-2 py-0.5">NSE</span>
+          <span className="hidden sm:inline text-[10px] text-zinc-500 font-mono tracking-wider border border-white/10 px-2 py-0.5">
+            {isCrypto ? 'CRYPTO' : 'NSE'}
+          </span>
         </div>
         <div className="flex items-center gap-2 md:gap-3">
           {selectedStock && (
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] md:text-xs font-mono text-[#00E676]" data-testid="selected-ticker">{selectedStock.ticker}</span>
+              {isCrypto && selectedStock.image && (
+                <img src={selectedStock.image} alt="" className="w-4 h-4 rounded-full" />
+              )}
+              <span className="text-[10px] md:text-xs font-mono text-[#00E676]" data-testid="selected-ticker">
+                {isCrypto ? selectedStock.symbol?.toUpperCase() : selectedStock.ticker}
+              </span>
               <span className="hidden sm:inline text-[10px] text-zinc-500">{selectedStock.name}</span>
             </div>
           )}
@@ -219,9 +272,12 @@ const TradingDashboard = () => {
                   <StockSearch onStockSelect={handleStockSelect} selectedStock={selectedStock} />
                 </div>
                 {signal && <div className="border-b border-white/10"><SignalDashboard signal={signal} /></div>}
-                {stockData && <div className="border-b border-white/10"><SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} /></div>}
+                {stockData && !isCrypto && <div className="border-b border-white/10"><SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} /></div>}
                 {selectedStock && selectedStock.type === 'INDEX' && <div className="border-b border-white/10"><OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} /></div>}
               </>
+            )}
+            {leftTab === 'crypto' && (
+              <CryptoList onCryptoSelect={handleCryptoSelect} selectedCrypto={isCrypto ? selectedStock : null} />
             )}
             {leftTab === 'watchlist' && <Watchlist onStockSelect={handleStockSelect} selectedStock={selectedStock} />}
             {leftTab === 'portfolio' && <PortfolioTracker selectedStock={selectedStock} />}
@@ -242,6 +298,7 @@ const TradingDashboard = () => {
             setSemiLogScale={setSemiLogScale}
             timeframe={timeframe}
             onTimeframeChange={handleTimeframeChange}
+            isCrypto={isCrypto}
           />
         </main>
 
@@ -264,7 +321,7 @@ const TradingDashboard = () => {
           <div className="flex-1 overflow-y-auto">
             {activeTab === 'strategies' && (
               <div className="divide-y divide-white/10">
-                {selectedStock && stockData && (
+                {selectedStock && stockData && !isCrypto && (
                   <>
                     <GPTAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <AITradeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
@@ -277,9 +334,12 @@ const TradingDashboard = () => {
                     <DemonAnalysis stockData={stockData} selectedStock={selectedStock} />
                   </>
                 )}
+                {selectedStock && stockData && isCrypto && (
+                  <CryptoDashboard preSelectedCoin={selectedStock} />
+                )}
                 {!selectedStock && (
                   <div className="p-6 text-center">
-                    <p className="text-zinc-500 text-sm">Select a stock to view strategies</p>
+                    <p className="text-zinc-500 text-sm">Select a stock or crypto to view strategies</p>
                   </div>
                 )}
               </div>
@@ -293,16 +353,12 @@ const TradingDashboard = () => {
               <BacktestModule selectedStock={selectedStock} />
             )}
 
-            {activeTab === 'crypto' && (
-              <CryptoDashboard />
-            )}
-
             {activeTab === 'tools' && (
               <div className="divide-y divide-white/10">
                 {selectedStock && selectedStock.type === 'INDEX' && (
                   <OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} />
                 )}
-                {stockData && (
+                {stockData && !isCrypto && (
                   <SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} />
                 )}
                 {!selectedStock && (

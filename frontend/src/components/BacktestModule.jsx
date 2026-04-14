@@ -31,12 +31,13 @@ const BacktestModule = ({ selectedStock }) => {
   const [showDaily, setShowDaily] = useState(false);
 
   const runBacktest = async () => {
-    if (!selectedStock) { toast.error('Select a stock first'); return; }
+    if (!selectedStock) { toast.error('Select a stock or crypto first'); return; }
     setLoading(true);
     setResults(null);
     try {
+      const ticker = selectedStock.type === 'CRYPTO' ? selectedStock.coin_id : selectedStock.ticker;
       const response = await axios.post(`${API}/backtest`, {
-        ticker: selectedStock.ticker,
+        ticker: ticker,
         strategy: selectedStrategy,
         days: days,
         timeframe: selectedTF
@@ -107,7 +108,7 @@ const BacktestModule = ({ selectedStock }) => {
         <button onClick={runBacktest} disabled={loading || !selectedStock}
           className="flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-[#00E676] text-black hover:bg-[#00C864] transition-colors disabled:opacity-50"
           data-testid="backtest-run-btn">
-          {loading ? 'Running...' : 'RUN BACKTEST'}
+          {loading ? 'Running...' : `RUN ${selectedStock?.type === 'CRYPTO' ? 'CRYPTO' : ''} BACKTEST`}
         </button>
       </div>
 
