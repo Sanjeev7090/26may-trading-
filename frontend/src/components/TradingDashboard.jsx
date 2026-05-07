@@ -188,7 +188,6 @@ const TradingDashboard = () => {
     { id: 'strategies', label: 'STRATEGIES' },
     { id: 'ghost', label: 'GHOST' },
     { id: 'backtest', label: 'BACKTEST' },
-    { id: 'tools', label: 'TOOLS' },
   ];
 
   const leftTabs = [
@@ -357,22 +356,6 @@ const TradingDashboard = () => {
 
             {activeTab === 'backtest' && (
               <BacktestModule selectedStock={selectedStock} />
-            )}
-
-            {activeTab === 'tools' && (
-              <div className="divide-y divide-white/10">
-                {selectedStock && selectedStock.type === 'INDEX' && (
-                  <OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} />
-                )}
-                {stockData && !isCrypto && (
-                  <SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} />
-                )}
-                {!selectedStock && (
-                  <div className="p-6 text-center">
-                    <p className="text-zinc-500 text-sm">Select a stock to use tools</p>
-                  </div>
-                )}
-              </div>
             )}
           </div>
         </aside>
