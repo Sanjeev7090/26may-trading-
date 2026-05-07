@@ -2831,6 +2831,144 @@ def run_demon_on_bars(bars):
     }
 
 
+# ======================= AUTO SCANNER =======================
+
+@api_router.get("/auto-scan/{ticker}")
+async def auto_scan_ticker(ticker: str):
+    """Auto-scan a ticker with ALL strategies and return active signals."""
+    try:
+        is_crypto = ticker.lower() in CRYPTO_IDS
+
+        if is_crypto:
+            coin_id = ticker.lower()
+            chart_data = await _coingecko_get(f"/coins/{coin_id}/ohlc", {
+                "vs_currency": "usd", "days": "30"
+            }, cache_ttl=300)
+            if not chart_data or len(chart_data) < 30:
+                return {"ticker": ticker, "signals": [], "has_signal": False, "message": "Insufficient data"}
+            bars = [{"open": c[1], "high": c[2], "low": c[3], "close": c[4], "volume": 0, "timestamp": c[0]} for c in chart_data]
+        else:
+            ticker_obj = yf.Ticker(ticker)
+            hist = ticker_obj.history(period="60d", interval="1h")
+            if hist.empty or len(hist) < 30:
+                hist = ticker_obj.history(period="90d", interval="1d")
+            if hist.empty or len(hist) < 30:
+                return {"ticker": ticker, "signals": [], "has_signal": False, "message": "Insufficient data"}
+            bars = []
+            for idx, row in hist.iterrows():
+                bars.append({
+                    "open": float(row['Open']), "high": float(row['High']),
+                    "low": float(row['Low']), "close": float(row['Close']),
+                    "volume": float(row.get('Volume', 0)),
+                    "timestamp": int(idx.timestamp() * 1000) if hasattr(idx, 'timestamp') else 0,
+                })
+
+        current = bars[-1]['close']
+        signals = []
+
+        # Run all mini strategies
+        fk = run_mini_falling_knife(bars)
+        if fk != "WAIT":
+            sl = current * 0.95
+            signals.append({
+                "strategy": "Falling Knife", "direction": fk,
+                "entry": round(current, 2), "stoploss": round(sl, 2),
+                "targets": [round(current * 1.05, 2), round(current * 1.10, 2), round(current * 1.15, 2)],
+                "confidence": 75,
+            })
+
+        rsa = run_mini_reverse_swings(bars, "A")
+        if rsa != "WAIT":
+            sl = current * (0.97 if rsa == "BUY" else 1.03)
+            mult = [1.03, 1.06, 1.09] if rsa == "BUY" else [0.97, 0.94, 0.91]
+            signals.append({
+                "strategy": "Reverse Swings A", "direction": rsa,
+                "entry": round(current, 2), "stoploss": round(sl, 2),
+                "targets": [round(current * m, 2) for m in mult],
+                "confidence": 70,
+            })
+
+        rsb = run_mini_reverse_swings(bars, "B")
+        if rsb != "WAIT":
+            sl = current * (0.97 if rsb == "BUY" else 1.03)
+            mult = [1.03, 1.06, 1.09] if rsb == "BUY" else [0.97, 0.94, 0.91]
+            signals.append({
+                "strategy": "Reverse Swings B", "direction": rsb,
+                "entry": round(current, 2), "stoploss": round(sl, 2),
+                "targets": [round(current * m, 2) for m in mult],
+                "confidence": 70,
+            })
+
+        ev = run_mini_explosive_volume(bars)
+        if ev != "WAIT":
+            sl = current * 0.96
+            signals.append({
+                "strategy": "Explosive Volume", "direction": ev,
+                "entry": round(current, 2), "stoploss": round(sl, 2),
+                "targets": [round(current * 1.05, 2), round(current * 1.10, 2), round(current * 1.18, 2)],
+                "confidence": 80,
+            })
+
+        gs = run_mini_golden_setup(bars)
+        if gs != "WAIT":
+            sl = current * (0.96 if gs == "BUY" else 1.04)
+            mult = [1.04, 1.08, 1.12] if gs == "BUY" else [0.96, 0.92, 0.88]
+            signals.append({
+                "strategy": "Golden Setup", "direction": gs,
+                "entry": round(current, 2), "stoploss": round(sl, 2),
+                "targets": [round(current * m, 2) for m in mult],
+                "confidence": 85,
+            })
+
+        ai_sig, ai_score = run_mini_ai_indicator(bars)
+        if ai_sig != "WAIT":
+            sl = current * (0.97 if ai_sig == "BUY" else 1.03)
+            mult = [1.04, 1.07, 1.11] if ai_sig == "BUY" else [0.96, 0.93, 0.89]
+            signals.append({
+                "strategy": f"AI Indicator ({ai_score})", "direction": ai_sig,
+                "entry": round(current, 2), "stoploss": round(sl, 2),
+                "targets": [round(current * m, 2) for m in mult],
+                "confidence": min(int(ai_score), 95),
+            })
+
+        gz = run_mini_godzilla(bars)
+        if gz != "WAIT":
+            sl = current * (0.96 if gz == "BUY" else 1.04)
+            mult = [1.05, 1.10, 1.15] if gz == "BUY" else [0.95, 0.90, 0.85]
+            signals.append({
+                "strategy": "Godzilla TTE", "direction": gz,
+                "entry": round(current, 2), "stoploss": round(sl, 2),
+                "targets": [round(current * m, 2) for m in mult],
+                "confidence": 82,
+            })
+
+        # DEMON confluence
+        demon = run_demon_on_bars(bars)
+        if demon and demon.get("signal_type") != "WAIT":
+            signals.append({
+                "strategy": f"DEMON ({demon['verdict']})", "direction": demon["signal_type"],
+                "entry": round(current, 2),
+                "stoploss": float(demon["stop_loss"]) if demon.get("stop_loss") else round(current * 0.95, 2),
+                "targets": [float(t) for t in demon.get("targets", [])] if demon.get("targets") else [round(current * 1.05, 2)],
+                "confidence": int(demon.get("confidence", 70)),
+            })
+
+        return {
+            "ticker": ticker,
+            "current_price": round(current, 2),
+            "signals": signals,
+            "has_signal": len(signals) > 0,
+            "signal_count": len(signals),
+            "scan_time": datetime.now(timezone.utc).isoformat(),
+            "is_crypto": is_crypto,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Auto-scan error for {ticker}: {e}")
+        return {"ticker": ticker, "signals": [], "has_signal": False, "message": str(e)}
+
+
 @api_router.get("/ghost/scan", response_model=GhostScanResponse)
 async def ghost_scan(min_match: int = 3):
     """Ghost Mode - Scan 50 Indian stocks with DEMON confluence logic"""

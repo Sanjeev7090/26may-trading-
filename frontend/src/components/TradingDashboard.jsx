@@ -21,8 +21,9 @@ import GPTAnalysis from './GPTAnalysis';
 import BacktestModule from './BacktestModule';
 import CryptoList from './CryptoList';
 import CryptoDashboard from './CryptoDashboard';
+import AutoScanner from './AutoScanner';
 import { Toaster, toast } from 'sonner';
-import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc } from '@phosphor-icons/react';
+import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning } from '@phosphor-icons/react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -36,7 +37,7 @@ const TradingDashboard = () => {
   const [signal, setSignal] = useState(null);
   const [semiLogScale, setSemiLogScale] = useState(false);
   const [timeframe, setTimeframe] = useState({ multiplier: 1, timespan: 'day', label: '1D' });
-  const [activeTab, setActiveTab] = useState('strategies');
+  const [activeTab, setActiveTab] = useState('scanner');
   const [leftTab, setLeftTab] = useState('search');
   const [mobilePanel, setMobilePanel] = useState('chart');
   const [cryptoChartDays, setCryptoChartDays] = useState(7);
@@ -183,6 +184,7 @@ const TradingDashboard = () => {
   const isCrypto = selectedStock?.type === 'CRYPTO';
 
   const rightTabs = [
+    { id: 'scanner', label: 'SCANNER' },
     { id: 'strategies', label: 'STRATEGIES' },
     { id: 'ghost', label: 'GHOST' },
     { id: 'backtest', label: 'BACKTEST' },
@@ -319,6 +321,10 @@ const TradingDashboard = () => {
 
           {/* Tab Content */}
           <div className="flex-1 overflow-y-auto">
+            {activeTab === 'scanner' && (
+              <AutoScanner selectedStock={selectedStock} />
+            )}
+
             {activeTab === 'strategies' && (
               <div className="divide-y divide-white/10">
                 {selectedStock && stockData && !isCrypto && (
