@@ -23,6 +23,7 @@ import CryptoList from './CryptoList';
 import CryptoDashboard from './CryptoDashboard';
 import AutoScanner from './AutoScanner';
 import SMCAnalysis from './SMCAnalysis';
+import AMDSAnalysis from './AMDSAnalysis';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning } from '@phosphor-icons/react';
 
@@ -331,6 +332,7 @@ const TradingDashboard = () => {
                   <>
                     {isCrypto && <CryptoDashboard preSelectedCoin={selectedStock} />}
                     <SMCAnalysis stockData={stockData} selectedStock={selectedStock} />
+                    <AMDSAnalysis stockData={stockData} selectedStock={selectedStock} />
                     <GPTAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <AITradeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <FallingKnifeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />

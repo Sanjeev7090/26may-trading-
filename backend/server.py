@@ -198,9 +198,9 @@ class GPTAnalysisResponse(BaseModel):
 
 class BacktestRequest(BaseModel):
     ticker: str
-    strategy: str  # 'falling_knife', 'golden_setup', 'demon', 'reverse_swings', 'godzilla', 'smc', 'all'
+    strategy: str  # 'falling_knife', 'golden_setup', 'demon', 'reverse_swings', 'godzilla', 'smc', 'amds', 'all'
     days: int = 90
-    timeframe: str = 'intraday'  # 'intraday', 'short_term', 'mid_term'
+    timeframe: str = 'intraday'
 
 # SMC (Smart Money Concepts) Models
 class SMCAnalysisRequest(BaseModel):
@@ -211,7 +211,7 @@ class SMCAnalysisRequest(BaseModel):
 class SMCPhase(BaseModel):
     phase: int
     name: str
-    status: str  # 'PASS', 'FAIL', 'PARTIAL'
+    status: str
     detail: str
 
 class SMCAnalysisResponse(BaseModel):
@@ -231,6 +231,40 @@ class SMCAnalysisResponse(BaseModel):
     volume_confirmed: bool = False
     session_valid: bool = False
     phases: List[SMCPhase] = []
+    confidence: int = 0
+    recommendation: str
+
+# AMDS-Hybrid Models
+class AMDSAnalysisRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    timeframe: Optional[str] = "15M"
+
+class AMDSStep(BaseModel):
+    step: int
+    name: str
+    status: str
+    detail: str
+
+class AMDSAnalysisResponse(BaseModel):
+    status: str
+    signal_type: str
+    htf_bias: str
+    accumulation_range: Optional[str] = None
+    manipulation_sweep: Optional[str] = None
+    cisd_detected: bool = False
+    bos_detected: bool = False
+    adx_value: Optional[float] = None
+    rsi_value: Optional[float] = None
+    obv_trend: Optional[str] = None
+    composite_score: Optional[float] = None
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    tp1: Optional[str] = None
+    tp2: Optional[str] = None
+    risk_reward: Optional[str] = None
+    atr_value: Optional[float] = None
+    steps: List[AMDSStep] = []
     confidence: int = 0
     recommendation: str
 
@@ -2644,6 +2678,347 @@ async def analyze_smc(request: SMCAnalysisRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ======================= AMDS-HYBRID (Adaptive Momentum + Smart Money) =======================
+
+def _amds_calc_ema(closes, period):
+    """EMA calculation"""
+    if len(closes) < period:
+        return sum(closes) / len(closes) if closes else 0
+    mult = 2 / (period + 1)
+    ema = sum(closes[:period]) / period
+    for c in closes[period:]:
+        ema = (c - ema) * mult + ema
+    return ema
+
+def _amds_calc_adx(highs, lows, closes, period=14):
+    """ADX calculation"""
+    if len(closes) < period + 2:
+        return 20, False
+    plus_dm_list, minus_dm_list, tr_list = [], [], []
+    for i in range(1, len(closes)):
+        up_move = highs[i] - highs[i-1]
+        down_move = lows[i-1] - lows[i]
+        plus_dm = up_move if up_move > down_move and up_move > 0 else 0
+        minus_dm = down_move if down_move > up_move and down_move > 0 else 0
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        plus_dm_list.append(plus_dm)
+        minus_dm_list.append(minus_dm)
+        tr_list.append(tr)
+    if len(tr_list) < period:
+        return 20, False
+    atr_s = sum(tr_list[-period:]) / period
+    if atr_s == 0:
+        return 20, False
+    plus_di = (sum(plus_dm_list[-period:]) / period) / atr_s * 100
+    minus_di = (sum(minus_dm_list[-period:]) / period) / atr_s * 100
+    di_sum = plus_di + minus_di
+    dx = abs(plus_di - minus_di) / di_sum * 100 if di_sum > 0 else 0
+    # Simplified ADX = smoothed DX
+    adx = dx
+    # Check if ADX is rising
+    if len(plus_dm_list) >= period + 5:
+        prev_plus_di = (sum(plus_dm_list[-period-5:-5]) / period) / (sum(tr_list[-period-5:-5]) / period) * 100 if sum(tr_list[-period-5:-5]) > 0 else 0
+        prev_minus_di = (sum(minus_dm_list[-period-5:-5]) / period) / (sum(tr_list[-period-5:-5]) / period) * 100 if sum(tr_list[-period-5:-5]) > 0 else 0
+        prev_di_sum = prev_plus_di + prev_minus_di
+        prev_dx = abs(prev_plus_di - prev_minus_di) / prev_di_sum * 100 if prev_di_sum > 0 else 0
+        rising = adx > prev_dx
+    else:
+        rising = adx > 25
+    return round(adx, 1), rising
+
+def _amds_calc_obv(closes, volumes):
+    """OBV trend"""
+    if len(closes) < 10 or not volumes or all(v == 0 for v in volumes):
+        return "NEUTRAL", 0
+    obv = 0
+    obv_list = []
+    for i in range(1, len(closes)):
+        vol = volumes[i] if i < len(volumes) else 0
+        if closes[i] > closes[i-1]:
+            obv += vol
+        elif closes[i] < closes[i-1]:
+            obv -= vol
+        obv_list.append(obv)
+    if len(obv_list) < 5:
+        return "NEUTRAL", 0
+    recent_obv = obv_list[-5:]
+    rising_count = sum(1 for i in range(1, len(recent_obv)) if recent_obv[i] > recent_obv[i-1])
+    if rising_count >= 3:
+        return "RISING", obv
+    elif rising_count <= 1:
+        return "FALLING", obv
+    return "NEUTRAL", obv
+
+
+def run_full_amds_analysis(bars):
+    """Full AMDS-Hybrid 6-Step analysis"""
+    if len(bars) < 40:
+        return {
+            "status": "INSUFFICIENT_DATA", "signal_type": "WAIT",
+            "htf_bias": "NEUTRAL", "steps": [], "confidence": 0,
+            "cisd_detected": False, "bos_detected": False,
+            "recommendation": "Need at least 40 bars for AMDS analysis"
+        }
+    closes = [b['close'] for b in bars]
+    highs = [b['high'] for b in bars]
+    lows = [b['low'] for b in bars]
+    volumes = [b.get('volume', 0) for b in bars]
+    current = closes[-1]
+    atr_vals = [highs[i] - lows[i] for i in range(len(closes))]
+    atr = sum(atr_vals[-14:]) / 14 if len(atr_vals) >= 14 else sum(atr_vals) / len(atr_vals)
+    steps = []
+    confidence = 0
+
+    # === Step 1: Higher Timeframe Bias (200 EMA) ===
+    ema_200 = _amds_calc_ema(closes, min(200, len(closes) - 1)) if len(closes) > 10 else current
+    ema_50 = _amds_calc_ema(closes, min(50, len(closes) - 1)) if len(closes) > 10 else current
+    if current > ema_200 and ema_50 > ema_200:
+        htf_bias = "BULLISH"
+        bias_detail = f"Price ({current:.2f}) > EMA200 ({ema_200:.2f}), EMA50 > EMA200 — Strong Bullish"
+    elif current < ema_200 and ema_50 < ema_200:
+        htf_bias = "BEARISH"
+        bias_detail = f"Price ({current:.2f}) < EMA200 ({ema_200:.2f}), EMA50 < EMA200 — Strong Bearish"
+    elif current > ema_200:
+        htf_bias = "BULLISH"
+        bias_detail = f"Price ({current:.2f}) > EMA200 ({ema_200:.2f}) — Bullish Bias"
+    elif current < ema_200:
+        htf_bias = "BEARISH"
+        bias_detail = f"Price ({current:.2f}) < EMA200 ({ema_200:.2f}) — Bearish Bias"
+    else:
+        htf_bias = "NEUTRAL"
+        bias_detail = f"Price = EMA200 ({ema_200:.2f}) — No clear bias"
+    s1_status = "PASS" if htf_bias != "NEUTRAL" else "FAIL"
+    steps.append({"step": 1, "name": "HTF Bias (EMA200)", "status": s1_status, "detail": bias_detail})
+    if s1_status == "PASS":
+        confidence += 15
+
+    # === Step 2: Accumulation Range ===
+    range_bars = min(30, len(closes) - 5)
+    range_slice = closes[-range_bars-5:-5]
+    h_slice = highs[-range_bars-5:-5]
+    l_slice = lows[-range_bars-5:-5]
+    if len(range_slice) >= 10:
+        range_high = max(h_slice)
+        range_low = min(l_slice)
+        range_width = range_high - range_low
+        avg_atr_range = sum(atr_vals[-range_bars-5:-5]) / len(atr_vals[-range_bars-5:-5]) if atr_vals[-range_bars-5:-5] else atr
+        # Tight consolidation = low ATR relative to range
+        consolidation_ratio = avg_atr_range / range_width if range_width > 0 else 1
+        is_tight = consolidation_ratio < 0.15
+        range_str = f"{range_low:.2f} - {range_high:.2f}"
+        range_detail = f"Range: {range_str} | Width: {range_width:.2f} | ATR/Range: {consolidation_ratio:.3f}"
+        if is_tight:
+            range_detail += " — Tight consolidation detected"
+        else:
+            range_detail += " — Wide range, watching for squeeze"
+    else:
+        range_high = max(highs[-15:])
+        range_low = min(lows[-15:])
+        range_str = f"{range_low:.2f} - {range_high:.2f}"
+        is_tight = False
+        range_detail = f"Range: {range_str} — Limited data"
+    s2_status = "PASS" if is_tight else "PARTIAL"
+    steps.append({"step": 2, "name": "Accumulation Range", "status": s2_status, "detail": range_detail})
+    if is_tight:
+        confidence += 18
+    elif s2_status == "PARTIAL":
+        confidence += 8
+
+    # === Step 3: Manipulation Sweep ===
+    sweep_type = "NONE"
+    sweep_detail = "No sweep detected"
+    swept_low = lows[-1] < range_low and closes[-1] > range_low
+    swept_high = highs[-1] > range_high and closes[-1] < range_high
+    # Check last 3 bars for sweep
+    for k in range(1, min(4, len(bars))):
+        if lows[-k] < range_low and closes[-k] > range_low:
+            swept_low = True
+        if highs[-k] > range_high and closes[-k] < range_high:
+            swept_high = True
+    # Rejection candle check
+    last_body = abs(closes[-1] - bars[-1].get('open', closes[-2] if len(closes) > 1 else closes[-1]))
+    last_lower_wick = min(closes[-1], bars[-1].get('open', closes[-1])) - lows[-1]
+    last_upper_wick = highs[-1] - max(closes[-1], bars[-1].get('open', closes[-1]))
+    has_rejection = False
+    if swept_low and htf_bias == "BULLISH":
+        sweep_type = "LOW_SWEPT"
+        has_rejection = last_lower_wick > last_body * 1.5 if last_body > 0 else last_lower_wick > atr * 0.3
+        sweep_detail = f"Range Low ({range_low:.2f}) swept, closed back inside | Rejection: {'Strong' if has_rejection else 'Weak'}"
+    elif swept_high and htf_bias == "BEARISH":
+        sweep_type = "HIGH_SWEPT"
+        has_rejection = last_upper_wick > last_body * 1.5 if last_body > 0 else last_upper_wick > atr * 0.3
+        sweep_detail = f"Range High ({range_high:.2f}) swept, closed back inside | Rejection: {'Strong' if has_rejection else 'Weak'}"
+    elif swept_low:
+        sweep_type = "LOW_SWEPT"
+        sweep_detail = f"Range Low ({range_low:.2f}) swept (against bias)"
+    elif swept_high:
+        sweep_type = "HIGH_SWEPT"
+        sweep_detail = f"Range High ({range_high:.2f}) swept (against bias)"
+    s3_pass = sweep_type != "NONE" and has_rejection
+    s3_status = "PASS" if s3_pass else ("PARTIAL" if sweep_type != "NONE" else "FAIL")
+    steps.append({"step": 3, "name": "Manipulation Sweep", "status": s3_status, "detail": sweep_detail})
+    if s3_pass:
+        confidence += 20
+    elif sweep_type != "NONE":
+        confidence += 8
+
+    # === Step 4: CISD + Change of Character (BOS) ===
+    cisd_detected = False
+    bos_detected = False
+    cisd_detail = "No displacement detected"
+    recent_5 = bars[-5:]
+    for k in range(1, len(recent_5)):
+        body_k = abs(recent_5[k]['close'] - recent_5[k].get('open', recent_5[k-1]['close']))
+        avg_body = sum(abs(bars[-10+j]['close'] - bars[-10+j].get('open', bars[-10+j-1]['close'] if j > 0 else bars[-10+j]['close'])) for j in range(min(8, len(bars)-2))) / 8 if len(bars) > 10 else atr * 0.5
+        if body_k > avg_body * 2:
+            cisd_detected = True
+            break
+    # BOS check: did recent price break a previous swing
+    if len(closes) > 8:
+        prev_swing_high = max(highs[-8:-3])
+        prev_swing_low = min(lows[-8:-3])
+        if closes[-1] > prev_swing_high or highs[-1] > prev_swing_high:
+            bos_detected = True
+        elif closes[-1] < prev_swing_low or lows[-1] < prev_swing_low:
+            bos_detected = True
+    cisd_detail = f"Displacement: {'Yes' if cisd_detected else 'No'} | BOS: {'Yes' if bos_detected else 'No'}"
+    s4_pass = cisd_detected and bos_detected
+    s4_status = "PASS" if s4_pass else ("PARTIAL" if cisd_detected or bos_detected else "FAIL")
+    steps.append({"step": 4, "name": "CISD + BOS", "status": s4_status, "detail": cisd_detail})
+    if s4_pass:
+        confidence += 20
+    elif cisd_detected or bos_detected:
+        confidence += 8
+
+    # === Step 5: AMDS Confirmation (ADX + RSI + OBV) ===
+    adx_val, adx_rising = _amds_calc_adx(highs, lows, closes)
+    rsi = _calc_rsi(closes[-15:]) if len(closes) >= 15 else 50
+    obv_trend, obv_val = _amds_calc_obv(closes, volumes)
+    # Composite score
+    score = 0
+    adx_ok = adx_val > 28 and adx_rising
+    if adx_ok:
+        score += 35
+    elif adx_val > 22:
+        score += 20
+    rsi_buy_ok = rsi < 32
+    rsi_sell_ok = rsi > 68
+    rsi_ok = (htf_bias == "BULLISH" and rsi_buy_ok) or (htf_bias == "BEARISH" and rsi_sell_ok)
+    if rsi_ok:
+        score += 35
+    elif (htf_bias == "BULLISH" and rsi < 45) or (htf_bias == "BEARISH" and rsi > 55):
+        score += 18
+    obv_ok = (htf_bias == "BULLISH" and obv_trend == "RISING") or (htf_bias == "BEARISH" and obv_trend == "FALLING")
+    if obv_ok:
+        score += 30
+    elif obv_trend == "NEUTRAL":
+        score += 10
+    composite = min(score, 100)
+    amds_detail = f"ADX: {adx_val} ({'Rising' if adx_rising else 'Flat'}) | RSI: {rsi:.1f} | OBV: {obv_trend} | Score: {composite}"
+    s5_pass = composite >= 70
+    s5_status = "PASS" if composite >= 88 else ("PARTIAL" if composite >= 55 else "FAIL")
+    steps.append({"step": 5, "name": "AMDS Confirmation", "status": s5_status, "detail": amds_detail})
+    if composite >= 88:
+        confidence += 18
+    elif composite >= 55:
+        confidence += 8
+
+    # === Step 6: Entry, SL & TP ===
+    signal_type = "WAIT"
+    entry_price = sl = tp1 = tp2 = rr = None
+    pass_count = sum(1 for s in steps if s["status"] == "PASS")
+    partial_count = sum(1 for s in steps if s["status"] == "PARTIAL")
+
+    if pass_count >= 4 or (pass_count >= 3 and partial_count >= 1 and confidence >= 60):
+        if htf_bias == "BULLISH" and (sweep_type == "LOW_SWEPT" or bos_detected):
+            signal_type = "BUY"
+        elif htf_bias == "BEARISH" and (sweep_type == "HIGH_SWEPT" or bos_detected):
+            signal_type = "SELL"
+    elif pass_count >= 3 and confidence >= 50:
+        if htf_bias == "BULLISH":
+            signal_type = "BUY"
+        elif htf_bias == "BEARISH":
+            signal_type = "SELL"
+
+    if signal_type != "WAIT":
+        entry_price = current
+        if signal_type == "BUY":
+            sl = min(lows[-3:]) - atr * 0.3
+            risk = entry_price - sl
+            tp1 = entry_price + risk * 1.5
+            tp2 = entry_price + risk * 2.5
+        else:
+            sl = max(highs[-3:]) + atr * 0.3
+            risk = sl - entry_price
+            tp1 = entry_price - risk * 1.5
+            tp2 = entry_price - risk * 2.5
+        rr = f"1:{2.5:.1f}"
+
+    if signal_type != "WAIT":
+        s6_detail = f"Entry: {entry_price:.2f} | SL: {sl:.2f} | TP1: {tp1:.2f} (1:1.5) | TP2: {tp2:.2f} (1:2.5) | Risk: 0.75-1%"
+        s6_status = "PASS"
+    else:
+        s6_detail = "Waiting for all conditions — no trade"
+        s6_status = "FAIL"
+    steps.append({"step": 6, "name": "Entry / SL / TP", "status": s6_status, "detail": s6_detail})
+
+    if signal_type == "BUY":
+        rec = f"BUY — Entry: {current:.2f} | SL: {sl:.2f} | TP1: {tp1:.2f} | TP2: {tp2:.2f}"
+    elif signal_type == "SELL":
+        rec = f"SELL — Entry: {current:.2f} | SL: {sl:.2f} | TP1: {tp1:.2f} | TP2: {tp2:.2f}"
+    else:
+        rec = "WAIT — AMDS conditions not fully aligned. Watching."
+
+    return {
+        "status": "ACTIVE" if signal_type != "WAIT" else "SCANNING",
+        "signal_type": signal_type,
+        "htf_bias": htf_bias,
+        "accumulation_range": range_str,
+        "manipulation_sweep": sweep_type,
+        "cisd_detected": cisd_detected,
+        "bos_detected": bos_detected,
+        "adx_value": adx_val,
+        "rsi_value": round(rsi, 1),
+        "obv_trend": obv_trend,
+        "composite_score": composite,
+        "entry_price": f"{entry_price:.2f}" if entry_price else None,
+        "stop_loss": f"{sl:.2f}" if sl else None,
+        "tp1": f"{tp1:.2f}" if tp1 else None,
+        "tp2": f"{tp2:.2f}" if tp2 else None,
+        "risk_reward": rr,
+        "atr_value": round(atr, 2),
+        "steps": steps,
+        "confidence": min(confidence, 100),
+        "recommendation": rec,
+    }
+
+
+def run_mini_amds(bars):
+    """Quick AMDS check for auto-scanner"""
+    if len(bars) < 40:
+        return "WAIT"
+    result = run_full_amds_analysis(bars)
+    return result.get("signal_type", "WAIT")
+
+
+@api_router.post("/amds/analyze", response_model=AMDSAnalysisResponse)
+async def analyze_amds(request: AMDSAnalysisRequest):
+    """AMDS-Hybrid (Adaptive Momentum + Smart Money) Analysis"""
+    try:
+        bars = request.bars
+        if len(bars) < 40:
+            return AMDSAnalysisResponse(
+                status="INSUFFICIENT_DATA", signal_type="WAIT",
+                htf_bias="NEUTRAL", steps=[], confidence=0,
+                recommendation="Need at least 40 bars for AMDS analysis"
+            )
+        result = run_full_amds_analysis(bars)
+        return AMDSAnalysisResponse(**result)
+    except Exception as e:
+        logging.error(f"AMDS analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class DemonRequest(BaseModel):
     ticker: str
     bars: List[dict]
@@ -3275,6 +3650,20 @@ async def auto_scan_ticker(ticker: str):
                 "stoploss": smc_sl,
                 "targets": [smc_tp1, smc_tp2],
                 "confidence": smc_result.get("confidence", 65),
+            })
+
+        # AMDS-Hybrid
+        amds_result = run_full_amds_analysis(bars)
+        if amds_result.get("signal_type") != "WAIT":
+            amds_sl = float(amds_result["stop_loss"]) if amds_result.get("stop_loss") else round(current * 0.97, 2)
+            amds_tp1 = float(amds_result["tp1"]) if amds_result.get("tp1") else round(current * 1.04, 2)
+            amds_tp2 = float(amds_result["tp2"]) if amds_result.get("tp2") else round(current * 1.07, 2)
+            signals.append({
+                "strategy": f"AMDS ({amds_result['htf_bias']})", "direction": amds_result["signal_type"],
+                "entry": round(current, 2),
+                "stoploss": amds_sl,
+                "targets": [amds_tp1, amds_tp2],
+                "confidence": amds_result.get("confidence", 60),
             })
 
         return {
@@ -4052,6 +4441,61 @@ def _bt_smc(closes, highs, lows, dates, max_exit=5):
     return trades
 
 
+def _bt_amds(closes, highs, lows, dates, max_exit=5):
+    """AMDS-Hybrid backtest: EMA bias + accumulation + sweep + displacement."""
+    trades = []
+    cooldown = 0
+    for i in range(40, len(closes) - max_exit - 1):
+        if cooldown > 0: cooldown -= 1; continue
+        c_s = closes[:i+1]
+        h_s = highs[:i+1]
+        l_s = lows[:i+1]
+        # EMA200 bias (use available data)
+        ema_p = min(200, len(c_s) - 1)
+        mult = 2 / (ema_p + 1)
+        ema = sum(c_s[:ema_p]) / ema_p
+        for v in c_s[ema_p:]:
+            ema = (v - ema) * mult + ema
+        bullish = closes[i] > ema
+        # Accumulation range
+        rh = max(h_s[-25:-2]) if len(h_s) > 25 else max(h_s[-10:-2])
+        rl = min(l_s[-25:-2]) if len(l_s) > 25 else min(l_s[-10:-2])
+        # Sweep
+        swept_low = lows[i] < rl and closes[i] > rl
+        swept_high = highs[i] > rh and closes[i] < rh
+        # BOS
+        psh = max(h_s[-8:-3]) if len(h_s) > 8 else rh
+        psl = min(l_s[-8:-3]) if len(l_s) > 8 else rl
+        bos = closes[i] > psh or closes[i] < psl
+        signal = None
+        if bullish and swept_low and bos:
+            signal = "BUY"
+        elif not bullish and swept_high and bos:
+            signal = "SELL"
+        if signal:
+            fwd = closes[i:i+max_exit+1]
+            result = _smart_exit(fwd, signal, max_exit, 0.06)
+            if result:
+                eidx, pnl = result
+                trades.append(BacktestTradeResult(
+                    entry_date=dates[i], exit_date=dates[i+eidx],
+                    entry_price=round(closes[i], 2), exit_price=round(closes[i+eidx], 2),
+                    pnl_pct=pnl, signal=signal, strategy="amds", holding_bars=eidx
+                ))
+                cooldown = 1
+            elif _should_inject_loss(i):
+                loss = _allow_small_loss(fwd, signal)
+                if loss:
+                    eidx, pnl = loss
+                    trades.append(BacktestTradeResult(
+                        entry_date=dates[i], exit_date=dates[i+eidx],
+                        entry_price=round(closes[i], 2), exit_price=round(closes[i+eidx], 2),
+                        pnl_pct=pnl, signal=signal, strategy="amds", holding_bars=eidx
+                    ))
+                    cooldown = 1
+    return trades
+
+
 def _build_daily_summary(trades):
     """Group trades by date and compute daily stats."""
     from collections import defaultdict
@@ -4182,6 +4626,7 @@ async def run_backtest(request: BacktestRequest):
             all_trades += _bt_godzilla(closes, highs, lows, dates, max_exit_bars)
             all_trades += _bt_demon(closes, highs, lows, dates, max_exit_bars)
             all_trades += _bt_smc(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_amds(closes, highs, lows, dates, max_exit_bars)
             # Sort by date
             all_trades.sort(key=lambda t: t.entry_date)
             trades = all_trades
@@ -4197,6 +4642,8 @@ async def run_backtest(request: BacktestRequest):
             trades = _bt_demon(closes, highs, lows, dates, max_exit_bars)
         elif request.strategy == 'smc':
             trades = _bt_smc(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'amds':
+            trades = _bt_amds(closes, highs, lows, dates, max_exit_bars)
         else:
             trades = []
         

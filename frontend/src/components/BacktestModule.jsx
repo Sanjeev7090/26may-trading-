@@ -14,6 +14,7 @@ const strategies = [
   { id: 'godzilla', label: 'Godzilla', color: '#FF0055' },
   { id: 'demon', label: 'DEMON', color: '#007AFF' },
   { id: 'smc', label: 'SMC', color: '#00E676' },
+  { id: 'amds', label: 'AMDS', color: '#06B6D4' },
 ];
 
 const timeframes = [
