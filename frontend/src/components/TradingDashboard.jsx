@@ -326,8 +326,9 @@ const TradingDashboard = () => {
 
             {activeTab === 'strategies' && (
               <div className="divide-y divide-white/10">
-                {selectedStock && stockData && !isCrypto && (
+                {selectedStock && stockData && (
                   <>
+                    {isCrypto && <CryptoDashboard preSelectedCoin={selectedStock} />}
                     <GPTAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <AITradeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <FallingKnifeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
@@ -338,9 +339,6 @@ const TradingDashboard = () => {
                     <GodzillaSetupAnalysis stockData={stockData} selectedStock={selectedStock} />
                     <DemonAnalysis stockData={stockData} selectedStock={selectedStock} />
                   </>
-                )}
-                {selectedStock && stockData && isCrypto && (
-                  <CryptoDashboard preSelectedCoin={selectedStock} />
                 )}
                 {!selectedStock && (
                   <div className="p-6 text-center">
