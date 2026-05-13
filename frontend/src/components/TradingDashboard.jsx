@@ -24,8 +24,10 @@ import CryptoDashboard from './CryptoDashboard';
 import AutoScanner from './AutoScanner';
 import SMCAnalysis from './SMCAnalysis';
 import AMDSAnalysis from './AMDSAnalysis';
+import MiroFishAnalysis from './MiroFishAnalysis';
+import StockNewsPopup from './StockNewsPopup';
 import { Toaster, toast } from 'sonner';
-import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning } from '@phosphor-icons/react';
+import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper } from '@phosphor-icons/react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -43,6 +45,7 @@ const TradingDashboard = () => {
   const [leftTab, setLeftTab] = useState('search');
   const [mobilePanel, setMobilePanel] = useState('chart');
   const [cryptoChartDays, setCryptoChartDays] = useState(7);
+  const [showNews, setShowNews] = useState(false);
   const wsRef = useRef(null);
 
   // WebSocket connection for real-time prices
@@ -117,6 +120,7 @@ const TradingDashboard = () => {
     fetchStockData(stock.ticker, defaultTf);
     subscribeWS(stock.ticker);
     setMobilePanel('chart');
+    setShowNews(true);
   };
 
   const handleCryptoSelect = (crypto) => {
@@ -231,6 +235,16 @@ const TradingDashboard = () => {
                 {isCrypto ? selectedStock.symbol?.toUpperCase() : selectedStock.ticker}
               </span>
               <span className="hidden sm:inline text-[10px] text-zinc-500">{selectedStock.name}</span>
+              {!isCrypto && (
+                <button
+                  onClick={() => setShowNews(true)}
+                  className="ml-1 p-1 rounded hover:bg-white/10 transition-colors"
+                  title="View News"
+                  data-testid="news-btn"
+                >
+                  <Newspaper size={14} className="text-sky-400" />
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -333,6 +347,7 @@ const TradingDashboard = () => {
                     {isCrypto && <CryptoDashboard preSelectedCoin={selectedStock} />}
                     <SMCAnalysis stockData={stockData} selectedStock={selectedStock} />
                     <AMDSAnalysis stockData={stockData} selectedStock={selectedStock} />
+                    <MiroFishAnalysis stockData={stockData} selectedStock={selectedStock} />
                     <GPTAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <AITradeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <FallingKnifeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
@@ -362,6 +377,14 @@ const TradingDashboard = () => {
           </div>
         </aside>
       </div>
+
+      {/* News Popup */}
+      {showNews && selectedStock && !isCrypto && (
+        <StockNewsPopup
+          ticker={selectedStock.ticker}
+          onClose={() => setShowNews(false)}
+        />
+      )}
     </div>
   );
 };

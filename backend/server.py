@@ -268,6 +268,35 @@ class AMDSAnalysisResponse(BaseModel):
     confidence: int = 0
     recommendation: str
 
+# ======================= MIROFISH MODELS =======================
+class MiroFishRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    timeframe: Optional[str] = "1D"
+
+class MiroFishAgentVerdict(BaseModel):
+    agent_name: str
+    role: str
+    verdict: str
+    reasoning: str
+    confidence: int
+
+class MiroFishResponse(BaseModel):
+    status: str
+    signal_type: str
+    swarm_consensus: str
+    consensus_score: float
+    direction: str
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    targets: Optional[List[str]] = None
+    risk_reward: Optional[str] = None
+    news_sentiment: str
+    news_summary: str
+    agents: List[MiroFishAgentVerdict] = []
+    confidence: int = 0
+    recommendation: str
+
 class BacktestTradeResult(BaseModel):
     entry_date: str
     exit_date: str
@@ -5038,6 +5067,245 @@ Return ONLY valid JSON."""
     except Exception as e:
         logging.error(f"Crypto GPT analysis error: {e}")
         raise HTTPException(status_code=500, detail=f"Crypto analysis failed: {str(e)}")
+
+
+# ======================= STOCK NEWS =======================
+
+@api_router.get("/news/{ticker}")
+async def get_stock_news(ticker: str):
+    """Fetch latest news for a stock using yfinance"""
+    cache_key = f"news_{ticker}"
+    cached = cache_storage.get(cache_key)
+    if cached and (datetime.now(timezone.utc) - cached['ts']).total_seconds() < 300:
+        return cached['data']
+    try:
+        t = yf.Ticker(ticker)
+        raw_news = t.news or []
+        news_items = []
+        for item in raw_news[:10]:
+            content = item.get('content') or {}
+            if not isinstance(content, dict) or not content.get('title'):
+                continue
+            thumb = content.get('thumbnail') or {}
+            resolutions = thumb.get('resolutions', []) if isinstance(thumb, dict) else []
+            image_url = resolutions[0]['url'] if resolutions else None
+            provider = content.get('provider') or {}
+            provider_name = provider.get('displayName', '') if isinstance(provider, dict) else str(provider)
+            canonical = content.get('canonicalUrl') or {}
+            url = canonical.get('url', '') if isinstance(canonical, dict) else ''
+            news_items.append({
+                "title": content.get('title', ''),
+                "summary": (content.get('summary', '') or '')[:300],
+                "published": content.get('pubDate', ''),
+                "source": provider_name,
+                "url": url,
+                "image": image_url,
+            })
+        result = {"ticker": ticker, "news": news_items, "count": len(news_items)}
+        cache_storage[cache_key] = {"data": result, "ts": datetime.now(timezone.utc)}
+        return result
+    except Exception as e:
+        logging.error(f"News fetch error for {ticker}: {e}")
+        return {"ticker": ticker, "news": [], "count": 0}
+
+
+# ======================= MIROFISH SWARM INTELLIGENCE =======================
+
+@api_router.post("/mirofish/analyze", response_model=MiroFishResponse)
+async def mirofish_analyze(request: MiroFishRequest):
+    """MiroFish Swarm Intelligence Engine - Multi-agent news sentiment + technical analysis"""
+    try:
+        bars = request.bars
+        if not bars or len(bars) < 10:
+            raise HTTPException(status_code=400, detail="Minimum 10 bars required")
+
+        ticker = request.ticker
+        closes = [b['close'] for b in bars if b.get('close')]
+        highs = [b['high'] for b in bars if b.get('high')]
+        lows = [b['low'] for b in bars if b.get('low')]
+        volumes = [b.get('volume', 0) for b in bars]
+
+        current_price = closes[-1]
+        highest = max(highs[-20:]) if len(highs) >= 20 else max(highs)
+        lowest = min(lows[-20:]) if len(lows) >= 20 else min(lows)
+
+        # RSI
+        rsi = 50
+        if len(closes) >= 15:
+            gains, losses_arr = [], []
+            for j in range(1, min(15, len(closes))):
+                d = closes[-j] - closes[-j - 1]
+                if d > 0:
+                    gains.append(d)
+                else:
+                    losses_arr.append(abs(d))
+            avg_g = sum(gains) / 14 if gains else 0.001
+            avg_l = sum(losses_arr) / 14 if losses_arr else 0.001
+            rs = avg_g / avg_l if avg_l > 0 else 1
+            rsi = 100 - (100 / (1 + rs))
+
+        # EMA 20
+        ema20 = current_price
+        if len(closes) >= 20:
+            ema20 = sum(closes[-20:]) / 20
+
+        # Volume trend
+        avg_vol = sum(volumes[-10:]) / 10 if len(volumes) >= 10 else sum(volumes) / max(len(volumes), 1)
+        recent_vol = volumes[-1] if volumes else 0
+        vol_ratio = recent_vol / avg_vol if avg_vol > 0 else 1
+
+        # Fetch news
+        news_text = "No news available"
+        try:
+            t = yf.Ticker(ticker)
+            raw_news = t.news or []
+            news_items = []
+            for item in raw_news[:6]:
+                content = item.get('content', {})
+                title = content.get('title', '')
+                summary = (content.get('summary', '') or '')[:200]
+                if title:
+                    news_items.append(f"- {title}: {summary}")
+            if news_items:
+                news_text = "\n".join(news_items)
+        except Exception:
+            pass
+
+        price_summary = ", ".join([f"{c:.2f}" for c in closes[-8:]])
+
+        # MiroFish Swarm Intelligence Prompt
+        prompt_text = f"""You are the MiroFish Swarm Intelligence Engine - a multi-agent prediction system.
+You will simulate 5 independent AI trading agents, each with a different specialization.
+Each agent analyzes the stock data and news independently, then a consensus is formed.
+
+STOCK: {ticker}
+Current Price: {current_price:.2f}
+RSI(14): {rsi:.1f}
+EMA20: {ema20:.2f}
+20-bar High: {highest:.2f} | 20-bar Low: {lowest:.2f}
+Recent Closes (last 8): {price_summary}
+Volume Ratio (current/avg): {vol_ratio:.2f}
+
+LATEST NEWS:
+{news_text}
+
+AGENTS TO SIMULATE:
+1. "Momentum Shark" - Pure technical momentum trader (RSI, EMA crossovers, volume spikes)
+2. "News Hawk" - News sentiment specialist (reads headlines, gauges market reaction)
+3. "Contrarian Fox" - Contrarian thinker (looks for overreaction, mean reversion setups)
+4. "Risk Owl" - Risk management focused (capital preservation, position sizing, SL placement)
+5. "Pattern Tiger" - Chart pattern recognition (support/resistance, breakout/breakdown setups)
+
+Each agent must give:
+- verdict: "BUY", "SELL", or "HOLD"
+- reasoning: 1-2 sentences
+- confidence: 1-100
+
+Then form SWARM CONSENSUS from all 5 agents using weighted majority.
+
+Return ONLY valid JSON with these exact fields:
+{{
+  "agents": [
+    {{"agent_name": "Momentum Shark", "role": "momentum", "verdict": "BUY/SELL/HOLD", "reasoning": "...", "confidence": 75}},
+    {{"agent_name": "News Hawk", "role": "news_sentiment", "verdict": "BUY/SELL/HOLD", "reasoning": "...", "confidence": 70}},
+    {{"agent_name": "Contrarian Fox", "role": "contrarian", "verdict": "BUY/SELL/HOLD", "reasoning": "...", "confidence": 65}},
+    {{"agent_name": "Risk Owl", "role": "risk_mgmt", "verdict": "BUY/SELL/HOLD", "reasoning": "...", "confidence": 60}},
+    {{"agent_name": "Pattern Tiger", "role": "pattern", "verdict": "BUY/SELL/HOLD", "reasoning": "...", "confidence": 70}}
+  ],
+  "swarm_consensus": "BULLISH/BEARISH/NEUTRAL",
+  "consensus_score": 72.5,
+  "direction": "BUY/SELL/HOLD",
+  "entry_price": "{current_price:.2f}",
+  "stop_loss": "specific price",
+  "targets": ["T1", "T2", "T3"],
+  "risk_reward": "1:2.5",
+  "news_sentiment": "POSITIVE/NEGATIVE/NEUTRAL",
+  "news_summary": "Brief 1-line summary of overall news impact",
+  "confidence": 72,
+  "recommendation": "Clear 1-2 line recommendation"
+}}
+
+Return ONLY valid JSON, no markdown."""
+
+        emergent_key = os.environ.get('EMERGENT_LLM_KEY')
+        if not emergent_key:
+            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+
+        chat = LlmChat(
+            api_key=emergent_key,
+            session_id=f"mirofish-{ticker}-{uuid.uuid4().hex[:8]}",
+            system_message="You are MiroFish, a Swarm Intelligence Engine that simulates multiple AI trading agents to form consensus predictions. Always respond with valid JSON only."
+        )
+        chat.with_model("anthropic", "claude-sonnet-4-5")
+
+        user_message = UserMessage(text=prompt_text)
+        response_text = await chat.send_message(user_message)
+
+        try:
+            cleaned = response_text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+                cleaned = cleaned.rsplit("```", 1)[0]
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Fallback based on technical indicators
+            direction = "BUY" if rsi < 45 and current_price > ema20 else "SELL" if rsi > 65 and current_price < ema20 else "HOLD"
+            parsed = {
+                "agents": [
+                    {"agent_name": "Momentum Shark", "role": "momentum", "verdict": direction, "reasoning": f"RSI at {rsi:.1f}, price {'above' if current_price > ema20 else 'below'} EMA20", "confidence": 60},
+                    {"agent_name": "News Hawk", "role": "news_sentiment", "verdict": "HOLD", "reasoning": "Unable to parse news sentiment", "confidence": 50},
+                    {"agent_name": "Contrarian Fox", "role": "contrarian", "verdict": "HOLD", "reasoning": "Waiting for clearer signal", "confidence": 45},
+                    {"agent_name": "Risk Owl", "role": "risk_mgmt", "verdict": "HOLD", "reasoning": "Risk parameters unclear", "confidence": 55},
+                    {"agent_name": "Pattern Tiger", "role": "pattern", "verdict": direction, "reasoning": f"Price near {'resistance' if current_price > ema20 else 'support'}", "confidence": 55},
+                ],
+                "swarm_consensus": "BULLISH" if direction == "BUY" else "BEARISH" if direction == "SELL" else "NEUTRAL",
+                "consensus_score": 55,
+                "direction": direction,
+                "entry_price": f"{current_price:.2f}",
+                "stop_loss": f"{current_price * 0.97:.2f}" if direction == "BUY" else f"{current_price * 1.03:.2f}",
+                "targets": [f"{current_price * 1.03:.2f}", f"{current_price * 1.05:.2f}", f"{current_price * 1.08:.2f}"] if direction == "BUY" else [f"{current_price * 0.97:.2f}", f"{current_price * 0.95:.2f}", f"{current_price * 0.92:.2f}"],
+                "risk_reward": "1:2",
+                "news_sentiment": "NEUTRAL",
+                "news_summary": response_text[:200] if response_text else "Analysis via technical fallback",
+                "confidence": 55,
+                "recommendation": f"Technical fallback: {direction} based on RSI={rsi:.1f}"
+            }
+
+        agents_raw = parsed.get("agents", [])
+        agents = []
+        for a in agents_raw:
+            agents.append(MiroFishAgentVerdict(
+                agent_name=str(a.get("agent_name", "Agent")),
+                role=str(a.get("role", "analyst")),
+                verdict=str(a.get("verdict", "HOLD")),
+                reasoning=str(a.get("reasoning", "")),
+                confidence=int(a.get("confidence", 50)),
+            ))
+
+        direction = parsed.get("direction", "HOLD")
+        signal_type = direction if direction in ["BUY", "SELL"] else "WAIT"
+
+        return MiroFishResponse(
+            status="SIGNAL" if signal_type != "WAIT" else "NO_SIGNAL",
+            signal_type=signal_type,
+            swarm_consensus=str(parsed.get("swarm_consensus", "NEUTRAL")),
+            consensus_score=float(parsed.get("consensus_score", 50)),
+            direction=direction,
+            entry_price=str(parsed.get("entry_price", f"{current_price:.2f}")),
+            stop_loss=str(parsed.get("stop_loss", "")),
+            targets=[str(t) for t in parsed.get("targets", [])],
+            risk_reward=str(parsed.get("risk_reward", "1:2")),
+            news_sentiment=str(parsed.get("news_sentiment", "NEUTRAL")),
+            news_summary=str(parsed.get("news_summary", "No summary available")),
+            agents=agents,
+            confidence=int(parsed.get("confidence", 50)),
+            recommendation=str(parsed.get("recommendation", "Run analysis for recommendation")),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"MiroFish Analysis error: {e}")
+        raise HTTPException(status_code=500, detail=f"MiroFish Analysis failed: {str(e)}")
 
 
 # ======================= WEBSOCKET PRICE STREAM =======================
