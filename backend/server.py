@@ -289,6 +289,7 @@ class MiroFishResponse(BaseModel):
     direction: str
     entry_price: Optional[str] = None
     stop_loss: Optional[str] = None
+    day_target: Optional[str] = None
     targets: Optional[List[str]] = None
     risk_reward: Optional[str] = None
     news_sentiment: str
@@ -5322,6 +5323,7 @@ Return ONLY valid JSON with these exact fields:
   "direction": "BUY/SELL/HOLD",
   "entry_price": "{current_price:.2f}",
   "stop_loss": "specific price",
+  "day_target": "realistic 1-day price target based on intraday momentum and news",
   "targets": ["T1", "T2", "T3"],
   "risk_reward": "1:2.5",
   "news_sentiment": "POSITIVE/NEGATIVE/NEUTRAL",
@@ -5368,6 +5370,7 @@ Return ONLY valid JSON, no markdown."""
                 "direction": direction,
                 "entry_price": f"{current_price:.2f}",
                 "stop_loss": f"{current_price * 0.97:.2f}" if direction == "BUY" else f"{current_price * 1.03:.2f}",
+                "day_target": f"{current_price * 1.015:.2f}" if direction == "BUY" else f"{current_price * 0.985:.2f}",
                 "targets": [f"{current_price * 1.03:.2f}", f"{current_price * 1.05:.2f}", f"{current_price * 1.08:.2f}"] if direction == "BUY" else [f"{current_price * 0.97:.2f}", f"{current_price * 0.95:.2f}", f"{current_price * 0.92:.2f}"],
                 "risk_reward": "1:2",
                 "news_sentiment": "NEUTRAL",
@@ -5398,6 +5401,7 @@ Return ONLY valid JSON, no markdown."""
             direction=direction,
             entry_price=str(parsed.get("entry_price", f"{current_price:.2f}")),
             stop_loss=str(parsed.get("stop_loss", "")),
+            day_target=str(parsed.get("day_target", "")),
             targets=[str(t) for t in parsed.get("targets", [])],
             risk_reward=str(parsed.get("risk_reward", "1:2")),
             news_sentiment=str(parsed.get("news_sentiment", "NEUTRAL")),
