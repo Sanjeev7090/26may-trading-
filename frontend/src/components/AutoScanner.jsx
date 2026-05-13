@@ -271,7 +271,7 @@ const AutoScanner = ({ selectedStock }) => {
             {/* Scan interval indicator */}
             <div className="flex items-center gap-1.5">
               <div className={`w-2 h-2 rounded-full ${isActive ? 'bg-[#00E676] animate-pulse' : 'bg-zinc-600'}`} />
-              <span className="text-[9px] text-zinc-500">Auto-scan har 30 sec | All 7 strategies active</span>
+              <span className="text-[9px] text-zinc-500">Auto-scan har 30 sec | All 8 strategies active</span>
             </div>
 
             {/* Active Signals */}
@@ -330,7 +330,7 @@ const AutoScanner = ({ selectedStock }) => {
               <p>4. Entry, Stoploss, Targets sab dikhega</p>
             </div>
             <div className="flex flex-wrap gap-1 mt-2">
-              {['Falling Knife', 'Golden Setup', 'Reverse Swings', 'Explosive Vol', 'AI Indicator', 'Godzilla', 'DEMON'].map(s => (
+              {['SMC', 'Falling Knife', 'Golden Setup', 'Reverse Swings', 'Explosive Vol', 'AI Indicator', 'Godzilla', 'DEMON'].map(s => (
                 <span key={s} className="text-[8px] bg-white/5 text-zinc-400 px-1.5 py-0.5 rounded">{s}</span>
               ))}
             </div>

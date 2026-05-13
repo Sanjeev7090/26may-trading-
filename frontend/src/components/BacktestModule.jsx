@@ -13,6 +13,7 @@ const strategies = [
   { id: 'reverse_swings', label: 'R.Swings', color: '#A855F7' },
   { id: 'godzilla', label: 'Godzilla', color: '#FF0055' },
   { id: 'demon', label: 'DEMON', color: '#007AFF' },
+  { id: 'smc', label: 'SMC', color: '#00E676' },
 ];
 
 const timeframes = [

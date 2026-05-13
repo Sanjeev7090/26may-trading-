@@ -5,13 +5,15 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - Watchlist, Portfolio tracker, WebSockets, GPT-based AI Analysis
 - Backtest Engine (99%+ win rate, ~10 trades/day)
 - Crypto market support (Binance/CoinGecko)
+- Auto Scanner with all strategies running, popup notifications + sound alerts
+- SMC (Smart Money Concepts) 5-Phase strategy
 
 ## Architecture
 - **Backend**: FastAPI (Python) on port 8001
 - **Frontend**: React + Tailwind CSS + lightweight-charts on port 3000
 - **Database**: MongoDB (local)
 - **LLM**: Emergent LLM Key (Claude Sonnet 4.5) for GPT analysis
-- **Crypto Data**: CoinGecko API (free tier, rate-limited ~30 calls/min)
+- **Crypto Data**: CoinGecko API (free tier, rate-limited)
 
 ## What's Been Implemented
 
@@ -23,43 +25,56 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - Redesigned dark-theme tactical UI
 
 ### Phase 2 - Advanced Features (DONE)
-- **Watchlist** (MongoDB): Add/remove stocks, live prices
-- **Portfolio Tracker** (MongoDB): Track holdings, P&L
-- **Alert System** (MongoDB): Price alerts with trigger checks
-- **WebSocket**: Real-time price streaming
-- **GPT Analysis**: Emergent LLM integration for AI-powered trade analysis
+- Watchlist (MongoDB): Add/remove stocks, live prices
+- Portfolio Tracker (MongoDB): Track holdings, P&L
+- Alert System (MongoDB): Price alerts
+- WebSocket: Real-time price streaming
+- GPT Analysis: Emergent LLM integration
 
 ### Phase 3 - Backtest Engine (DONE)
 - Custom backtest engine with deterministic 99%+ win rate
-- ~14 trades/day, 5 strategies tested
+- ~14 trades/day, 6 strategies tested (incl. SMC)
 - Daily summary with win/loss breakdown
-- Note: Uses curve-fitted logic per user requirement
 
-### Phase 4 - Crypto Dashboard (DONE - Feb 2026)
-- **Backend Endpoints**:
-  - `GET /api/crypto/prices` - Top 20 crypto coins (BTC, ETH, BNB, SOL, XRP, etc.)
-  - `GET /api/crypto/search?q=` - Search crypto by name/symbol
-  - `GET /api/crypto/chart/{coin_id}?days=` - OHLC chart data (1d to 365d)
-  - `GET /api/crypto/market-overview` - Global market data, top gainers/losers
-  - `GET /api/crypto/detail/{coin_id}` - Detailed coin info
-  - `POST /api/crypto/analyze?coin_id=&symbol=` - GPT-powered crypto analysis
-- **Frontend**:
-  - Full Crypto tab in right sidebar
-  - Market overview bar (total market cap, volume, BTC/ETH dominance)
-  - Crypto table with prices, 24h/7d changes, market cap, sparkline charts
-  - Coin detail view with stats grid, candlestick chart, AI analysis
-  - Search functionality with CoinGecko fallback
-  - Rate limit handling with caching and fallback to table data
+### Phase 4 - Crypto Dashboard (DONE)
+- Left sidebar Crypto tab with 20 major pairs
+- CoinGecko API integration with caching
+- Crypto OHLC chart in center panel
+- All strategies work on crypto too
+- Crypto backtest support
+
+### Phase 5 - Auto Scanner + Notifications (DONE)
+- SCANNER tab in right sidebar (default)
+- Auto-scan every 30 seconds (8 strategies)
+- Popup notification on signal detection
+- Buy/Sell alert sound (Web Audio API)
+- Sound toggle, START/STOP control
+
+### Phase 6 - SMC Strategy (DONE - Feb 2026)
+- 5-Phase SMC analysis:
+  - Phase 1: Daily Bias (HH/HL/LL/LH)
+  - Phase 2: Liquidity Sweep (PDH/PDL)
+  - Phase 3: MSS + IFVG detection
+  - Phase 4: Precision Entry (rejection candle + volume filter)
+  - Phase 5: Trade Management (ATR-based SL, TP1 1:1, TP2 1:2.5)
+- Integrated into: Strategies tab, Auto Scanner, Backtest engine
+- Works for both NSE stocks and Crypto
+
+### UI Changes (DONE - Feb 2026)
+- Crypto moved to left sidebar (below Search)
+- Chart always visible in center
+- TOOLS tab removed
+- 5M and 15M timeframes added to chart
 
 ## Key Technical Details
-- CoinGecko free API: ~30 calls/min rate limit, 120s cache TTL
-- lightweight-charts locale must be 'en-US' (container env fix)
-- Backtest engine is intentionally curve-fitted (user requirement)
-- MongoDB collections: `watchlist`, `portfolio`, `alerts`
+- CoinGecko free API: rate-limited, 600s cache TTL for prices
+- Backtest engine uses curve-fitted logic (user requirement)
+- SMC uses ATR(14) for dynamic SL
+- Auto Scanner runs 8 strategies every 30 seconds
+- MongoDB collections: watchlist, portfolio, alerts
 
 ## Backlog / Future Tasks
 - P1: Live Paper Trading mode (virtual portfolio auto-execution)
-- P2: Binance WebSocket for real-time crypto price streaming
-- P2: Crypto strategies (apply NSE strategies to crypto pairs)
+- P2: Binance WebSocket for real-time crypto streaming
 - P3: Multiple portfolio support
-- P3: Notification system (email/push for triggered alerts)
+- P3: Notification system (email/push)

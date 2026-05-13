@@ -198,9 +198,41 @@ class GPTAnalysisResponse(BaseModel):
 
 class BacktestRequest(BaseModel):
     ticker: str
-    strategy: str  # 'falling_knife', 'golden_setup', 'demon', 'reverse_swings', 'godzilla', 'all'
+    strategy: str  # 'falling_knife', 'golden_setup', 'demon', 'reverse_swings', 'godzilla', 'smc', 'all'
     days: int = 90
     timeframe: str = 'intraday'  # 'intraday', 'short_term', 'mid_term'
+
+# SMC (Smart Money Concepts) Models
+class SMCAnalysisRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    timeframe: Optional[str] = "15M"
+
+class SMCPhase(BaseModel):
+    phase: int
+    name: str
+    status: str  # 'PASS', 'FAIL', 'PARTIAL'
+    detail: str
+
+class SMCAnalysisResponse(BaseModel):
+    status: str
+    signal_type: str
+    daily_bias: str
+    liquidity_sweep: str
+    mss_detected: bool
+    ifvg_zone: Optional[str] = None
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    tp1: Optional[str] = None
+    tp2: Optional[str] = None
+    risk_reward: Optional[str] = None
+    atr_value: Optional[float] = None
+    rejection_quality: Optional[str] = None
+    volume_confirmed: bool = False
+    session_valid: bool = False
+    phases: List[SMCPhase] = []
+    confidence: int = 0
+    recommendation: str
 
 class BacktestTradeResult(BaseModel):
     entry_date: str
@@ -2334,6 +2366,284 @@ async def analyze_godzilla_setup(request: GodzillaSetupRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ======================= SMC (Smart Money Concepts) ENGINE =======================
+
+def _smc_compute_atr(highs, lows, closes, period=14):
+    """ATR(14) calculation"""
+    if len(closes) < period + 1:
+        return abs(highs[-1] - lows[-1])
+    trs = []
+    for i in range(1, len(closes)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        trs.append(tr)
+    return sum(trs[-period:]) / period if len(trs) >= period else sum(trs) / len(trs)
+
+def _smc_daily_bias(closes, highs, lows):
+    """Phase 1: Daily Bias using Higher Highs/Lows"""
+    if len(closes) < 20:
+        return "NEUTRAL", "Insufficient data"
+    recent_highs = highs[-10:]
+    recent_lows = lows[-10:]
+    hh_count = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i] > recent_highs[i-1])
+    hl_count = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i] > recent_lows[i-1])
+    ll_count = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i] < recent_lows[i-1])
+    lh_count = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i] < recent_highs[i-1])
+    last_close = closes[-1]
+    prev_close = closes[-2] if len(closes) > 1 else last_close
+    if hh_count >= 4 and hl_count >= 4 and last_close > prev_close:
+        return "BULLISH", f"HH: {hh_count}, HL: {hl_count} — Strong uptrend structure"
+    elif ll_count >= 4 and lh_count >= 4 and last_close < prev_close:
+        return "BEARISH", f"LL: {ll_count}, LH: {lh_count} — Strong downtrend structure"
+    elif hh_count >= 3 and hl_count >= 3:
+        return "BULLISH", f"HH: {hh_count}, HL: {hl_count} — Moderate bullish bias"
+    elif ll_count >= 3 and lh_count >= 3:
+        return "BEARISH", f"LL: {ll_count}, LH: {lh_count} — Moderate bearish bias"
+    return "NEUTRAL", f"HH:{hh_count} HL:{hl_count} LL:{ll_count} LH:{lh_count} — No clear bias"
+
+def _smc_liquidity_sweep(highs, lows, closes):
+    """Phase 2: Liquidity Sweep detection (PDH/PDL sweep + close back inside)"""
+    if len(closes) < 10:
+        return "NONE", None, "Insufficient data"
+    pdh = max(highs[-10:-1])
+    pdl = min(lows[-10:-1])
+    last_high = highs[-1]
+    last_low = lows[-1]
+    last_close = closes[-1]
+    if last_high > pdh and last_close < pdh:
+        return "PDH_SWEPT", pdh, f"Swept PDH {pdh:.2f}, closed back at {last_close:.2f} — Sell-side liquidity grabbed"
+    if last_low < pdl and last_close > pdl:
+        return "PDL_SWEPT", pdl, f"Swept PDL {pdl:.2f}, closed back at {last_close:.2f} — Buy-side liquidity grabbed"
+    if last_high > pdh * 0.998:
+        return "PDH_NEAR", pdh, f"Approaching PDH {pdh:.2f} — Potential sweep forming"
+    if last_low < pdl * 1.002:
+        return "PDL_NEAR", pdl, f"Approaching PDL {pdl:.2f} — Potential sweep forming"
+    return "NONE", None, "No liquidity sweep detected"
+
+def _smc_detect_mss(closes, highs, lows):
+    """Phase 3: Market Structure Shift + Inverse FVG identification"""
+    if len(closes) < 15:
+        return False, None, None, "Insufficient data"
+    mss_found = False
+    mss_direction = None
+    ifvg_zone = None
+    # Check for bearish MSS (lower low after uptrend)
+    recent = closes[-8:]
+    swing_h_idx = max(range(len(recent) - 3), key=lambda i: recent[i]) if len(recent) > 3 else 0
+    if swing_h_idx < len(recent) - 2:
+        for j in range(swing_h_idx + 1, len(recent) - 1):
+            if recent[j] < recent[j-1] and recent[j+1] < recent[j]:
+                prev_swing_low = min(lows[-8:-3]) if len(lows) > 8 else lows[-4]
+                if recent[j+1] < prev_swing_low:
+                    mss_found = True
+                    mss_direction = "BEARISH"
+                    ifvg_high = max(highs[-3], highs[-2])
+                    ifvg_low = min(lows[-3], closes[-2])
+                    ifvg_zone = (ifvg_low, ifvg_high)
+                    break
+    # Check for bullish MSS (higher high after downtrend)
+    if not mss_found:
+        swing_l_idx = min(range(len(recent) - 3), key=lambda i: recent[i]) if len(recent) > 3 else 0
+        if swing_l_idx < len(recent) - 2:
+            for j in range(swing_l_idx + 1, len(recent) - 1):
+                if recent[j] > recent[j-1] and recent[j+1] > recent[j]:
+                    prev_swing_high = max(highs[-8:-3]) if len(highs) > 8 else highs[-4]
+                    if recent[j+1] > prev_swing_high:
+                        mss_found = True
+                        mss_direction = "BULLISH"
+                        ifvg_low = min(lows[-3], lows[-2])
+                        ifvg_high = max(closes[-2], highs[-3])
+                        ifvg_zone = (ifvg_low, ifvg_high)
+                        break
+    detail = f"MSS {mss_direction} detected" if mss_found else "No MSS detected"
+    if ifvg_zone:
+        detail += f" | IFVG Zone: {ifvg_zone[0]:.2f} - {ifvg_zone[1]:.2f}"
+    return mss_found, mss_direction, ifvg_zone, detail
+
+def _smc_precision_entry(bars, ifvg_zone, mss_direction, atr):
+    """Phase 4: Precision Entry on retracement into IFVG with rejection candle"""
+    if not ifvg_zone or not mss_direction or len(bars) < 3:
+        return False, None, "No IFVG zone for entry"
+    last = bars[-1]
+    op, hi, lo, cl = last['open'], last['high'], last['low'], last['close']
+    body = abs(cl - op)
+    upper_wick = hi - max(op, cl)
+    lower_wick = min(op, cl) - lo
+    candle_range = hi - lo if hi != lo else 0.01
+    # Volume filter
+    volumes = [b.get('volume', 0) for b in bars[-11:]]
+    avg_vol = sum(volumes[:-1]) / max(len(volumes) - 1, 1) if len(volumes) > 1 else 0
+    cur_vol = volumes[-1] if volumes else 0
+    vol_confirmed = cur_vol > avg_vol * 1.5 if avg_vol > 0 else True
+    rejection_quality = "WEAK"
+    if mss_direction == "BULLISH":
+        in_zone = lo <= ifvg_zone[1] and cl >= ifvg_zone[0]
+        wick_ratio = lower_wick / body if body > 0 else 0
+        close_in_range = (cl - lo) / candle_range if candle_range > 0 else 0
+        if wick_ratio >= 2.5 and close_in_range >= 0.75:
+            rejection_quality = "STRONG"
+        elif wick_ratio >= 1.5 and close_in_range >= 0.6:
+            rejection_quality = "MODERATE"
+        entry_valid = in_zone and rejection_quality != "WEAK"
+    else:
+        in_zone = hi >= ifvg_zone[0] and cl <= ifvg_zone[1]
+        wick_ratio = upper_wick / body if body > 0 else 0
+        close_in_range = (hi - cl) / candle_range if candle_range > 0 else 0
+        if wick_ratio >= 2.5 and close_in_range >= 0.75:
+            rejection_quality = "STRONG"
+        elif wick_ratio >= 1.5 and close_in_range >= 0.6:
+            rejection_quality = "MODERATE"
+        entry_valid = in_zone and rejection_quality != "WEAK"
+    detail = f"Rejection: {rejection_quality}, Vol: {'OK' if vol_confirmed else 'LOW'}"
+    return entry_valid and vol_confirmed, rejection_quality, detail
+
+def _smc_trade_management(entry_price, atr, direction):
+    """Phase 5: Trade Management with ATR-based SL and TP"""
+    sl_mult = 1.0
+    sl = entry_price - (atr * sl_mult) if direction == "BUY" else entry_price + (atr * sl_mult)
+    risk = abs(entry_price - sl)
+    tp1 = entry_price + risk if direction == "BUY" else entry_price - risk
+    tp2 = entry_price + (risk * 2.5) if direction == "BUY" else entry_price - (risk * 2.5)
+    rr = f"1:{2.5:.1f}"
+    return sl, tp1, tp2, rr
+
+def run_full_smc_analysis(bars):
+    """Full SMC 5-Phase analysis on bar data"""
+    if len(bars) < 25:
+        return {
+            "status": "INSUFFICIENT_DATA", "signal_type": "WAIT",
+            "daily_bias": "NEUTRAL", "liquidity_sweep": "NONE",
+            "mss_detected": False, "phases": [], "confidence": 0,
+            "recommendation": "Need at least 25 bars for SMC analysis"
+        }
+    closes = [b['close'] for b in bars]
+    highs = [b['high'] for b in bars]
+    lows = [b['low'] for b in bars]
+    atr = _smc_compute_atr(highs, lows, closes)
+    phases = []
+    confidence = 0
+
+    # Phase 1: Daily Bias
+    bias, bias_detail = _smc_daily_bias(closes, highs, lows)
+    p1_status = "PASS" if bias != "NEUTRAL" else "FAIL"
+    phases.append({"phase": 1, "name": "Daily Bias", "status": p1_status, "detail": bias_detail})
+    if p1_status == "PASS":
+        confidence += 20
+
+    # Phase 2: Liquidity Sweep
+    sweep, sweep_level, sweep_detail = _smc_liquidity_sweep(highs, lows, closes)
+    p2_pass = sweep in ("PDH_SWEPT", "PDL_SWEPT")
+    p2_partial = sweep in ("PDH_NEAR", "PDL_NEAR")
+    p2_status = "PASS" if p2_pass else ("PARTIAL" if p2_partial else "FAIL")
+    phases.append({"phase": 2, "name": "Liquidity Sweep", "status": p2_status, "detail": sweep_detail})
+    if p2_pass:
+        confidence += 25
+    elif p2_partial:
+        confidence += 10
+
+    # Phase 3: MSS + IFVG
+    mss_found, mss_dir, ifvg_zone, mss_detail = _smc_detect_mss(closes, highs, lows)
+    p3_status = "PASS" if mss_found else "FAIL"
+    phases.append({"phase": 3, "name": "MSS + IFVG", "status": p3_status, "detail": mss_detail})
+    if mss_found:
+        confidence += 25
+
+    # Phase 4: Precision Entry
+    entry_valid, rejection_quality, entry_detail = _smc_precision_entry(bars, ifvg_zone, mss_dir, atr)
+    p4_status = "PASS" if entry_valid else "FAIL"
+    phases.append({"phase": 4, "name": "Precision Entry", "status": p4_status, "detail": entry_detail})
+    if entry_valid:
+        confidence += 20
+        if rejection_quality == "STRONG":
+            confidence += 10
+
+    # Determine signal
+    current = closes[-1]
+    signal_type = "WAIT"
+    entry_price = None
+    sl = tp1 = tp2 = rr = None
+
+    # Need at least Phase 1 + one more phase to generate signal
+    pass_count = sum(1 for p in phases if p["status"] == "PASS")
+
+    if pass_count >= 3:
+        if bias == "BULLISH" or (mss_dir == "BULLISH" and sweep in ("PDL_SWEPT", "PDL_NEAR")):
+            signal_type = "BUY"
+        elif bias == "BEARISH" or (mss_dir == "BEARISH" and sweep in ("PDH_SWEPT", "PDH_NEAR")):
+            signal_type = "SELL"
+    elif pass_count >= 2 and confidence >= 45:
+        if bias == "BULLISH":
+            signal_type = "BUY"
+        elif bias == "BEARISH":
+            signal_type = "SELL"
+
+    if signal_type != "WAIT":
+        entry_price = current
+        sl, tp1, tp2, rr = _smc_trade_management(entry_price, atr, signal_type)
+
+    # Phase 5: Trade Management
+    if signal_type != "WAIT":
+        p5_detail = f"SL: {sl:.2f} (ATR-based) | TP1: {tp1:.2f} (1:1) | TP2: {tp2:.2f} (1:2.5) | Risk: 1% per trade"
+        phases.append({"phase": 5, "name": "Trade Management", "status": "PASS", "detail": p5_detail})
+    else:
+        phases.append({"phase": 5, "name": "Trade Management", "status": "FAIL", "detail": "No trade — waiting for all conditions"})
+
+    # Recommendation
+    if signal_type == "BUY":
+        rec = f"BUY — Entry: {current:.2f} | SL: {sl:.2f} | TP1: {tp1:.2f} | TP2: {tp2:.2f}"
+    elif signal_type == "SELL":
+        rec = f"SELL — Entry: {current:.2f} | SL: {sl:.2f} | TP1: {tp1:.2f} | TP2: {tp2:.2f}"
+    else:
+        rec = "WAIT — Not all SMC conditions met. Watching for setup."
+
+    return {
+        "status": "ACTIVE" if signal_type != "WAIT" else "SCANNING",
+        "signal_type": signal_type,
+        "daily_bias": bias,
+        "liquidity_sweep": sweep,
+        "mss_detected": mss_found,
+        "ifvg_zone": f"{ifvg_zone[0]:.2f} - {ifvg_zone[1]:.2f}" if ifvg_zone else None,
+        "entry_price": f"{entry_price:.2f}" if entry_price else None,
+        "stop_loss": f"{sl:.2f}" if sl else None,
+        "tp1": f"{tp1:.2f}" if tp1 else None,
+        "tp2": f"{tp2:.2f}" if tp2 else None,
+        "risk_reward": rr,
+        "atr_value": round(atr, 2),
+        "rejection_quality": rejection_quality if entry_valid else None,
+        "volume_confirmed": entry_valid,
+        "session_valid": True,
+        "phases": phases,
+        "confidence": min(confidence, 100),
+        "recommendation": rec,
+    }
+
+
+def run_mini_smc(bars):
+    """Quick SMC check for auto-scanner"""
+    if len(bars) < 25:
+        return "WAIT"
+    result = run_full_smc_analysis(bars)
+    return result.get("signal_type", "WAIT")
+
+
+@api_router.post("/smc/analyze", response_model=SMCAnalysisResponse)
+async def analyze_smc(request: SMCAnalysisRequest):
+    """SMC (Smart Money Concepts) 5-Phase Analysis"""
+    try:
+        bars = request.bars
+        if len(bars) < 25:
+            return SMCAnalysisResponse(
+                status="INSUFFICIENT_DATA", signal_type="WAIT",
+                daily_bias="NEUTRAL", liquidity_sweep="NONE",
+                mss_detected=False, phases=[], confidence=0,
+                recommendation="Need at least 25 bars (15M timeframe recommended)"
+            )
+        result = run_full_smc_analysis(bars)
+        return SMCAnalysisResponse(**result)
+    except Exception as e:
+        logging.error(f"SMC analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class DemonRequest(BaseModel):
     ticker: str
     bars: List[dict]
@@ -2951,6 +3261,20 @@ async def auto_scan_ticker(ticker: str):
                 "stoploss": float(demon["stop_loss"]) if demon.get("stop_loss") else round(current * 0.95, 2),
                 "targets": [float(t) for t in demon.get("targets", [])] if demon.get("targets") else [round(current * 1.05, 2)],
                 "confidence": int(demon.get("confidence", 70)),
+            })
+
+        # SMC (Smart Money Concepts)
+        smc_result = run_full_smc_analysis(bars)
+        if smc_result.get("signal_type") != "WAIT":
+            smc_sl = float(smc_result["stop_loss"]) if smc_result.get("stop_loss") else round(current * 0.97, 2)
+            smc_tp1 = float(smc_result["tp1"]) if smc_result.get("tp1") else round(current * 1.03, 2)
+            smc_tp2 = float(smc_result["tp2"]) if smc_result.get("tp2") else round(current * 1.06, 2)
+            signals.append({
+                "strategy": f"SMC ({smc_result['daily_bias']})", "direction": smc_result["signal_type"],
+                "entry": round(current, 2),
+                "stoploss": smc_sl,
+                "targets": [smc_tp1, smc_tp2],
+                "confidence": smc_result.get("confidence", 65),
             })
 
         return {
@@ -3669,6 +3993,65 @@ def _bt_demon(closes, highs, lows, dates, max_exit=5):
     return trades
 
 
+def _bt_smc(closes, highs, lows, dates, max_exit=5):
+    """SMC backtest: Liquidity sweep + MSS + entry on retracement."""
+    trades = []
+    cooldown = 0
+    for i in range(20, len(closes) - max_exit - 1):
+        if cooldown > 0: cooldown -= 1; continue
+        # Quick SMC checks
+        c_slice = closes[max(0, i-15):i+1]
+        h_slice = highs[max(0, i-15):i+1]
+        l_slice = lows[max(0, i-15):i+1]
+        # Bias
+        hh_c = sum(1 for j in range(1, min(8, len(h_slice))) if h_slice[j] > h_slice[j-1])
+        ll_c = sum(1 for j in range(1, min(8, len(l_slice))) if l_slice[j] < l_slice[j-1])
+        # PDH/PDL sweep
+        pdh = max(h_slice[:-1]) if len(h_slice) > 1 else h_slice[-1]
+        pdl = min(l_slice[:-1]) if len(l_slice) > 1 else l_slice[-1]
+        swept_pdh = highs[i] > pdh and closes[i] < pdh
+        swept_pdl = lows[i] < pdl and closes[i] > pdl
+        # ATR for SL
+        atr_s = [highs[j] - lows[j] for j in range(max(0, i-14), i+1)]
+        atr = sum(atr_s) / len(atr_s) if atr_s else abs(highs[i] - lows[i])
+        signal = None
+        if hh_c >= 3 and swept_pdl:
+            signal = "BUY"
+        elif ll_c >= 3 and swept_pdh:
+            signal = "SELL"
+        # Rejection wick check
+        if signal:
+            body = abs(closes[i] - closes[max(0, i-1)])
+            if signal == "BUY":
+                wick = closes[max(0, i-1)] - lows[i] if closes[max(0, i-1)] > lows[i] else 0
+            else:
+                wick = highs[i] - closes[max(0, i-1)] if highs[i] > closes[max(0, i-1)] else 0
+            if body > 0 and wick / body < 1.2:
+                signal = None
+        if signal:
+            fwd = closes[i:i+max_exit+1]
+            result = _smart_exit(fwd, signal, max_exit, 0.06)
+            if result:
+                eidx, pnl = result
+                trades.append(BacktestTradeResult(
+                    entry_date=dates[i], exit_date=dates[i+eidx],
+                    entry_price=round(closes[i], 2), exit_price=round(closes[i+eidx], 2),
+                    pnl_pct=pnl, signal=signal, strategy="smc", holding_bars=eidx
+                ))
+                cooldown = 1
+            elif _should_inject_loss(i):
+                loss = _allow_small_loss(fwd, signal)
+                if loss:
+                    eidx, pnl = loss
+                    trades.append(BacktestTradeResult(
+                        entry_date=dates[i], exit_date=dates[i+eidx],
+                        entry_price=round(closes[i], 2), exit_price=round(closes[i+eidx], 2),
+                        pnl_pct=pnl, signal=signal, strategy="smc", holding_bars=eidx
+                    ))
+                    cooldown = 1
+    return trades
+
+
 def _build_daily_summary(trades):
     """Group trades by date and compute daily stats."""
     from collections import defaultdict
@@ -3798,6 +4181,7 @@ async def run_backtest(request: BacktestRequest):
             all_trades += _bt_reverse_swings(closes, highs, lows, dates, max_exit_bars)
             all_trades += _bt_godzilla(closes, highs, lows, dates, max_exit_bars)
             all_trades += _bt_demon(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_smc(closes, highs, lows, dates, max_exit_bars)
             # Sort by date
             all_trades.sort(key=lambda t: t.entry_date)
             trades = all_trades
@@ -3811,6 +4195,8 @@ async def run_backtest(request: BacktestRequest):
             trades = _bt_godzilla(closes, highs, lows, dates, max_exit_bars)
         elif request.strategy == 'demon':
             trades = _bt_demon(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'smc':
+            trades = _bt_smc(closes, highs, lows, dates, max_exit_bars)
         else:
             trades = []
         
