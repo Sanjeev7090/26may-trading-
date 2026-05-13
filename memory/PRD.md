@@ -10,7 +10,7 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - AMDS-Hybrid (Adaptive Momentum + Smart Money) 6-Step strategy
 - Both strategies optimized for 6-8 daily signals
 - Stock News Popup when selecting a stock
-- MiroFish Swarm Intelligence Strategy (multi-agent AI consensus)
+- MiroFish Swarm Intelligence Strategy (multi-agent AI consensus) with Day Target
 
 ## Architecture
 - **Backend**: FastAPI (Python) on port 8001
@@ -27,24 +27,16 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 5. AI Indicator Score
 6. Godzilla TTE
 7. DEMON Confluence
-8. **SMC (Smart Money Concepts)** — 5 Phase: Bias, Liquidity Sweep, MSS+IFVG, Precision Entry, Trade Management
-9. **AMDS-Hybrid** — 6 Step: EMA200 Bias, Accumulation, Sweep, CISD+BOS, ADX/RSI/OBV Score, Entry/SL/TP
-10. **MiroFish (Swarm Intelligence)** — 5 AI Agents: Momentum Shark, News Hawk, Contrarian Fox, Risk Owl, Pattern Tiger → Consensus Buy/Sell/Hold with Entry/SL/Targets
+8. **SMC (Smart Money Concepts)** — 5 Phase
+9. **AMDS-Hybrid** — 6 Step
+10. **MiroFish (Swarm Intelligence)** — 5 AI Agents with Day Target + Swing Targets
 
 ## Features Implemented (Feb 2026)
-- Stock News Popup: Auto-appears when stock selected, shows 10 latest news from yfinance with title, summary, source, time, thumbnail
-- MiroFish Strategy: GPT-4o powered 5-agent swarm analysis with consensus scoring, news sentiment, trade levels
-- News button in header to reopen news popup anytime
+- Stock News Popup: Auto-appears when stock selected, 10 latest news from yfinance
+- MiroFish Strategy: GPT-4o powered 5-agent swarm with Day Target + T1/T2/T3 Swing Targets
+- MiroFish integrated into Auto Scanner (cached 5 min)
+- News button in header to reopen news popup
 - Endpoints: GET /api/news/{ticker}, POST /api/mirofish/analyze
-
-## SMC/AMDS Optimizations (Feb 2026)
-- Relaxed bias thresholds: 2 HH/HL enough (was 3-4)
-- Wider liquidity proximity: 0.5-1% near PDH/PDL (was 0.2%)
-- MSS fallback: price direction based weak MSS detection
-- Precision entry: wick ratio 0.8x (was 1.5x), volume 0.8x avg (was 1.5x)
-- AMDS ADX > 20 (was 28), RSI < 42/> 58 (was 32/68)
-- Signal threshold: 2 PASS (was 3-4)
-- Result: 3-7 signals per stock scan, easily 6-8+ daily alerts across watchlist
 
 ## Known Issues
 - CoinGecko Rate Limits (429) - Free tier limitation, cache active

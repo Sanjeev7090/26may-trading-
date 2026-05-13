@@ -161,22 +161,32 @@ const MiroFishAnalysis = ({ stockData, selectedStock }) => {
             <span className="text-[9px] text-zinc-600 flex-1 truncate">{result.news_summary}</span>
           </div>
 
-          {/* Entry / SL / Targets */}
+          {/* Entry / SL / Day Target / Targets */}
           {hasSignal && (
-            <div className="grid grid-cols-3 gap-2 text-[10px]">
-              <div>
-                <p className="text-zinc-500 text-[9px]">Entry</p>
-                <p className="font-mono font-bold text-white" data-testid="mirofish-entry">{result.entry_price}</p>
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-2 text-[10px]">
+                <div>
+                  <p className="text-zinc-500 text-[9px]">Entry</p>
+                  <p className="font-mono font-bold text-white" data-testid="mirofish-entry">{result.entry_price}</p>
+                </div>
+                <div>
+                  <p className="text-zinc-500 text-[9px]">SL</p>
+                  <p className="font-mono font-bold text-red-400" data-testid="mirofish-sl">{result.stop_loss}</p>
+                </div>
+                {result.day_target && (
+                  <div>
+                    <p className="text-[#00BCD4] text-[9px] font-bold">Day Target</p>
+                    <p className="font-mono font-bold text-[#00BCD4]" data-testid="mirofish-day-target">{result.day_target}</p>
+                  </div>
+                )}
               </div>
               <div>
-                <p className="text-zinc-500 text-[9px]">SL</p>
-                <p className="font-mono font-bold text-red-400" data-testid="mirofish-sl">{result.stop_loss}</p>
-              </div>
-              <div>
-                <p className="text-zinc-500 text-[9px]">Targets</p>
-                {result.targets?.map((t, i) => (
-                  <p key={i} className="font-mono text-emerald-400 text-[9px]">T{i + 1}: {t}</p>
-                ))}
+                <p className="text-zinc-500 text-[9px] mb-0.5">Swing Targets</p>
+                <div className="flex gap-1.5">
+                  {result.targets?.map((t, i) => (
+                    <span key={i} className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded" data-testid={`mirofish-target-${i}`}>T{i + 1}: {t}</span>
+                  ))}
+                </div>
               </div>
             </div>
           )}
