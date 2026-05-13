@@ -3598,6 +3598,79 @@ def run_demon_on_bars(bars):
 
 # ======================= AUTO SCANNER =======================
 
+async def _run_mirofish_for_scanner(ticker: str, bars: list, current_price: float) -> dict:
+    """Lightweight MiroFish call for auto-scanner with news + GPT swarm consensus."""
+    closes = [b['close'] for b in bars if b.get('close')]
+    volumes = [b.get('volume', 0) for b in bars]
+
+    # RSI
+    rsi = 50
+    if len(closes) >= 15:
+        gains, losses_a = [], []
+        for j in range(1, min(15, len(closes))):
+            d = closes[-j] - closes[-j - 1]
+            if d > 0:
+                gains.append(d)
+            else:
+                losses_a.append(abs(d))
+        avg_g = sum(gains) / 14 if gains else 0.001
+        avg_l = sum(losses_a) / 14 if losses_a else 0.001
+        rs = avg_g / avg_l if avg_l > 0 else 1
+        rsi = 100 - (100 / (1 + rs))
+
+    ema20 = sum(closes[-20:]) / min(len(closes), 20) if closes else current_price
+    avg_vol = sum(volumes[-10:]) / max(len(volumes[-10:]), 1)
+    vol_ratio = (volumes[-1] / avg_vol) if avg_vol > 0 and volumes else 1
+
+    # Fetch news
+    news_text = "No news"
+    try:
+        t = yf.Ticker(ticker)
+        raw_news = t.news or []
+        items = []
+        for item in raw_news[:4]:
+            c = item.get('content') or {}
+            title = c.get('title', '')
+            if title:
+                items.append(f"- {title}")
+        if items:
+            news_text = "\n".join(items)
+    except Exception:
+        pass
+
+    price_summary = ", ".join([f"{c:.2f}" for c in closes[-6:]])
+
+    prompt = f"""You are MiroFish Swarm Scanner. Quickly simulate 5 trading agents and give consensus.
+
+STOCK: {ticker} | Price: {current_price:.2f} | RSI: {rsi:.1f} | EMA20: {ema20:.2f} | Vol Ratio: {vol_ratio:.2f}
+Recent: {price_summary}
+
+NEWS:
+{news_text}
+
+Return ONLY valid JSON:
+{{"signal_type":"BUY/SELL/HOLD","swarm_consensus":"BULLISH/BEARISH/NEUTRAL","confidence":70,"stop_loss":"{current_price * 0.97:.2f}","targets":["{current_price * 1.03:.2f}","{current_price * 1.05:.2f}","{current_price * 1.08:.2f}"]}}"""
+
+    emergent_key = os.environ.get('EMERGENT_LLM_KEY')
+    if not emergent_key:
+        return None
+
+    chat = LlmChat(
+        api_key=emergent_key,
+        session_id=f"mf-scan-{ticker}-{uuid.uuid4().hex[:6]}",
+        system_message="You are a fast trading signal scanner. Respond with valid JSON only."
+    )
+    chat.with_model("openai", "gpt-4o")
+    resp = await chat.send_message(UserMessage(text=prompt))
+
+    cleaned = resp.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        cleaned = cleaned.rsplit("```", 1)[0]
+    parsed = json.loads(cleaned)
+    return parsed
+
+
 @api_router.get("/auto-scan/{ticker}")
 async def auto_scan_ticker(ticker: str):
     """Auto-scan a ticker with ALL strategies and return active signals."""
@@ -3745,6 +3818,38 @@ async def auto_scan_ticker(ticker: str):
                 "targets": [amds_tp1, amds_tp2],
                 "confidence": amds_result.get("confidence", 60),
             })
+
+        # MiroFish Swarm Intelligence (cached 5 min to avoid excessive LLM calls)
+        mf_cache_key = f"mirofish_scan_{ticker}"
+        mf_cached = cache_storage.get(mf_cache_key)
+        if mf_cached and (datetime.now(timezone.utc) - mf_cached['ts']).total_seconds() < 300:
+            mf_data = mf_cached['data']
+            if mf_data.get('signal_type') in ('BUY', 'SELL'):
+                signals.append(mf_data['signal'])
+        else:
+            try:
+                mf_result = await asyncio.wait_for(_run_mirofish_for_scanner(ticker, bars, current), timeout=25)
+                if mf_result and mf_result.get('signal_type') in ('BUY', 'SELL'):
+                    mf_signal = {
+                        "strategy": f"MiroFish ({mf_result['swarm_consensus']})",
+                        "direction": mf_result['signal_type'],
+                        "entry": round(current, 2),
+                        "stoploss": float(mf_result.get('stop_loss', current * 0.97)),
+                        "targets": [float(t) for t in mf_result.get('targets', [])],
+                        "confidence": int(mf_result.get('confidence', 65)),
+                    }
+                    cache_storage[mf_cache_key] = {
+                        "data": {"signal_type": mf_result['signal_type'], "signal": mf_signal},
+                        "ts": datetime.now(timezone.utc)
+                    }
+                    signals.append(mf_signal)
+                else:
+                    cache_storage[mf_cache_key] = {
+                        "data": {"signal_type": "WAIT"},
+                        "ts": datetime.now(timezone.utc)
+                    }
+            except (asyncio.TimeoutError, Exception) as mf_err:
+                logging.warning(f"MiroFish scanner skip for {ticker}: {mf_err}")
 
         return {
             "ticker": ticker,

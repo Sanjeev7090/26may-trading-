@@ -271,7 +271,7 @@ const AutoScanner = ({ selectedStock }) => {
             {/* Scan interval indicator */}
             <div className="flex items-center gap-1.5">
               <div className={`w-2 h-2 rounded-full ${isActive ? 'bg-[#00E676] animate-pulse' : 'bg-zinc-600'}`} />
-              <span className="text-[9px] text-zinc-500">Auto-scan har 30 sec | All 9 strategies active</span>
+              <span className="text-[9px] text-zinc-500">Auto-scan har 30 sec | All 10 strategies active</span>
             </div>
 
             {/* Active Signals */}
@@ -325,13 +325,13 @@ const AutoScanner = ({ selectedStock }) => {
             <p className="text-[10px] text-zinc-400 font-bold">Auto Scanner kaise kaam karta hai:</p>
             <div className="space-y-1 text-[9px] text-zinc-500">
               <p>1. START press karo — har 30 sec mein scan hoga</p>
-              <p>2. 7 strategies ek saath chalti hain</p>
+              <p>2. 10 strategies ek saath chalti hain (incl. MiroFish AI)</p>
               <p>3. Signal milte hi popup + sound alert</p>
               <p>4. Entry, Stoploss, Targets sab dikhega</p>
             </div>
             <div className="flex flex-wrap gap-1 mt-2">
-              {['SMC', 'AMDS', 'Falling Knife', 'Golden Setup', 'Reverse Swings', 'Explosive Vol', 'AI Indicator', 'Godzilla', 'DEMON'].map(s => (
-                <span key={s} className="text-[8px] bg-white/5 text-zinc-400 px-1.5 py-0.5 rounded">{s}</span>
+              {['SMC', 'AMDS', 'MiroFish', 'Falling Knife', 'Golden Setup', 'Reverse Swings', 'Explosive Vol', 'AI Indicator', 'Godzilla', 'DEMON'].map(s => (
+                <span key={s} className={`text-[8px] px-1.5 py-0.5 rounded ${s === 'MiroFish' ? 'bg-[#00BCD4]/15 text-[#00BCD4]' : 'bg-white/5 text-zinc-400'}`}>{s}</span>
               ))}
             </div>
           </div>
