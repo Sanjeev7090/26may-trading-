@@ -126,6 +126,51 @@ const SignalStack = ({ signals, ticker, isCrypto, onDismiss }) => {
 };
 
 // ---- Main AutoScanner Component ----
+// ---- Confluence Score Meter ----
+const ConfluenceMeter = ({ score, label, direction, aligned, total }) => {
+  const getColor = (s) => {
+    if (s >= 85) return { bar: '#00E676', text: '#00E676', glow: 'shadow-[0_0_12px_#00E676aa]' };
+    if (s >= 65) return { bar: '#69F0AE', text: '#69F0AE', glow: 'shadow-[0_0_8px_#69F0AEaa]' };
+    if (s >= 45) return { bar: '#FFD600', text: '#FFD600', glow: '' };
+    if (s >= 25) return { bar: '#FF9800', text: '#FF9800', glow: '' };
+    return { bar: '#FF3B30', text: '#FF3B30', glow: '' };
+  };
+  const c = getColor(score);
+
+  return (
+    <div className="border border-white/10 rounded-lg p-2.5 bg-white/[0.02] mb-2" data-testid="confluence-meter">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Confluence Score</span>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+            direction === 'BUY'
+              ? 'bg-[#00E676]/15 text-[#00E676]'
+              : direction === 'SELL'
+              ? 'bg-[#FF3B30]/15 text-[#FF3B30]'
+              : 'bg-white/5 text-zinc-400'
+          }`} data-testid="confluence-direction">{direction}</span>
+          <span className="text-[9px] text-zinc-500 font-mono">{aligned}/{total}</span>
+        </div>
+      </div>
+
+      {/* Score Bar */}
+      <div className="relative h-2 bg-white/5 rounded-full overflow-hidden mb-1.5">
+        <div
+          className={`absolute left-0 top-0 h-full rounded-full transition-all duration-700 ${c.glow}`}
+          style={{ width: `${score}%`, backgroundColor: c.bar }}
+          data-testid="confluence-bar"
+        />
+      </div>
+
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-black" style={{ color: c.text }} data-testid="confluence-label">{label}</span>
+        <span className="text-base font-black font-mono" style={{ color: c.text }} data-testid="confluence-score">{score}</span>
+      </div>
+    </div>
+  );
+};
+
+// ---- Main AutoScanner Component ----
 const AutoScanner = ({ selectedStock }) => {
   const [isActive, setIsActive] = useState(false);
   const [signals, setSignals] = useState([]);
@@ -133,6 +178,7 @@ const AutoScanner = ({ selectedStock }) => {
   const [lastScan, setLastScan] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [confluenceData, setConfluenceData] = useState(null);
   const intervalRef = useRef(null);
   const seenSignalsRef = useRef(new Set());
 
@@ -145,6 +191,15 @@ const AutoScanner = ({ selectedStock }) => {
     try {
       const { data } = await axios.get(`${API}/auto-scan/${ticker}`);
       setLastScan(new Date().toLocaleTimeString());
+
+      // Always update confluence data (even with no signals)
+      setConfluenceData({
+        score: data.confluence_score ?? 0,
+        label: data.confluence_label ?? 'WEAK',
+        direction: data.dominant_direction ?? 'NEUTRAL',
+        aligned: data.aligned_count ?? 0,
+        total: data.total_strategies ?? 11,
+      });
 
       if (data.has_signal && data.signals?.length > 0) {
         setSignals(data.signals);
@@ -191,6 +246,7 @@ const AutoScanner = ({ selectedStock }) => {
     setSignals([]);
     setPopupSignals([]);
     setLastScan(null);
+    setConfluenceData(null);
   }, [ticker]);
 
   const toggleScanner = () => {
@@ -199,6 +255,7 @@ const AutoScanner = ({ selectedStock }) => {
     if (isActive) {
       setSignals([]);
       setPopupSignals([]);
+      setConfluenceData(null);
       seenSignalsRef.current.clear();
     }
   };
@@ -273,6 +330,17 @@ const AutoScanner = ({ selectedStock }) => {
               <div className={`w-2 h-2 rounded-full ${isActive ? 'bg-[#00E676] animate-pulse' : 'bg-zinc-600'}`} />
               <span className="text-[9px] text-zinc-500">Auto-scan har 30 sec | All 11 strategies active</span>
             </div>
+
+            {/* Confluence Score Meter */}
+            {confluenceData && (
+              <ConfluenceMeter
+                score={confluenceData.score}
+                label={confluenceData.label}
+                direction={confluenceData.direction}
+                aligned={confluenceData.aligned}
+                total={confluenceData.total}
+              />
+            )}
 
             {/* Active Signals */}
             {signals.length > 0 ? (

@@ -4454,6 +4454,38 @@ async def auto_scan_ticker(ticker: str):
             except (asyncio.TimeoutError, Exception) as mf_err:
                 logging.warning(f"MiroFish scanner skip for {ticker}: {mf_err}")
 
+        # ---- Confluence Score Calculation ----
+        buy_signals = [s for s in signals if s["direction"] == "BUY"]
+        sell_signals = [s for s in signals if s["direction"] == "SELL"]
+        dominant_dir = "BUY" if len(buy_signals) >= len(sell_signals) else "SELL"
+        aligned = buy_signals if dominant_dir == "BUY" else sell_signals
+
+        # Base score: aligned strategies out of 11 total
+        base_score = (len(aligned) / 11) * 70
+
+        # Premium strategy bonus (+10 each, max 30 extra)
+        premium_names = ["PAC+S&O", "MiroFish", "SMC", "AMDS"]
+        premium_bonus = 0
+        for sig in aligned:
+            for pname in premium_names:
+                if pname in sig["strategy"]:
+                    premium_bonus += 7.5
+                    break
+        premium_bonus = min(premium_bonus, 30)
+
+        confluence_score = min(int(base_score + premium_bonus), 100)
+
+        if confluence_score >= 85:
+            confluence_label = "EXTREME"
+        elif confluence_score >= 65:
+            confluence_label = "VERY STRONG"
+        elif confluence_score >= 45:
+            confluence_label = "STRONG"
+        elif confluence_score >= 25:
+            confluence_label = "MODERATE"
+        else:
+            confluence_label = "WEAK"
+
         return {
             "ticker": ticker,
             "current_price": round(current, 2),
@@ -4462,6 +4494,11 @@ async def auto_scan_ticker(ticker: str):
             "signal_count": len(signals),
             "scan_time": datetime.now(timezone.utc).isoformat(),
             "is_crypto": is_crypto,
+            "confluence_score": confluence_score,
+            "confluence_label": confluence_label,
+            "dominant_direction": dominant_dir if signals else "NEUTRAL",
+            "aligned_count": len(aligned),
+            "total_strategies": 11,
         }
     except HTTPException:
         raise

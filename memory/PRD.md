@@ -42,6 +42,7 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - MiroFish Strategy: GPT-4o powered 5-agent swarm with Day Target + T1/T2/T3
 - MiroFish + PAC+S&O integrated into Auto Scanner
 - News button in header to reopen news popup
+- **Confluence Score Meter**: 0-100 visual bar in Auto Scanner; color-coded (red→yellow→green); shows label (WEAK/MODERATE/STRONG/VERY STRONG/EXTREME), dominant direction, and aligned count out of 11 strategies; premium strategies (PAC+S&O, MiroFish, SMC, AMDS) get bonus weight
 
 ## Known Issues
 - CoinGecko Rate Limits (429) - Free tier limitation, cache active
