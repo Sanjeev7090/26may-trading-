@@ -4237,7 +4237,7 @@ NEWS:
 {news_text}
 
 Return ONLY valid JSON:
-{{"signal_type":"BUY/SELL/HOLD","swarm_consensus":"BULLISH/BEARISH/NEUTRAL","confidence":70,"stop_loss":"{current_price * 0.97:.2f}","targets":["{current_price * 1.03:.2f}","{current_price * 1.05:.2f}","{current_price * 1.08:.2f}"]}}"""
+{{"signal_type":"BUY/SELL/HOLD","swarm_consensus":"BULLISH/BEARISH/NEUTRAL","confidence":70,"stop_loss":"{current_price * 0.97:.2f}","day_target":"{current_price * 1.015:.2f}","targets":["{current_price * 1.03:.2f}","{current_price * 1.05:.2f}","{current_price * 1.08:.2f}"]}}"""
 
     emergent_key = os.environ.get('EMERGENT_LLM_KEY')
     if not emergent_key:
@@ -4292,6 +4292,22 @@ async def auto_scan_ticker(ticker: str):
         current = bars[-1]['close']
         signals = []
 
+        # ---- 1-Day Target Helper ----
+        def calc_day_target(direction: str) -> float:
+            """ATR-based 1-day price target for any bar interval."""
+            recent = bars[-min(10, len(bars)):]
+            if len(recent) < 2:
+                avg_range = current * 0.015
+            else:
+                ranges = [b['high'] - b['low'] for b in recent if b.get('high') and b.get('low')]
+                avg_range = (sum(ranges) / len(ranges)) if ranges else current * 0.015
+            range_pct = avg_range / current if current > 0 else 0.015
+            # If hourly bars (range < 0.5% each), scale up to ~1 day (6 bars)
+            if range_pct < 0.005:
+                avg_range *= 6
+            avg_range = max(current * 0.005, min(avg_range, current * 0.04))
+            return round(current + avg_range if direction == "BUY" else current - avg_range, 2)
+
         # Run all mini strategies
         fk = run_mini_falling_knife(bars)
         if fk != "WAIT":
@@ -4301,6 +4317,7 @@ async def auto_scan_ticker(ticker: str):
                 "entry": round(current, 2), "stoploss": round(sl, 2),
                 "targets": [round(current * 1.05, 2), round(current * 1.10, 2), round(current * 1.15, 2)],
                 "confidence": 75,
+                "day_target": calc_day_target(fk),
             })
 
         rsa = run_mini_reverse_swings(bars, "A")
@@ -4312,6 +4329,7 @@ async def auto_scan_ticker(ticker: str):
                 "entry": round(current, 2), "stoploss": round(sl, 2),
                 "targets": [round(current * m, 2) for m in mult],
                 "confidence": 70,
+                "day_target": calc_day_target(rsa),
             })
 
         rsb = run_mini_reverse_swings(bars, "B")
@@ -4323,6 +4341,7 @@ async def auto_scan_ticker(ticker: str):
                 "entry": round(current, 2), "stoploss": round(sl, 2),
                 "targets": [round(current * m, 2) for m in mult],
                 "confidence": 70,
+                "day_target": calc_day_target(rsb),
             })
 
         ev = run_mini_explosive_volume(bars)
@@ -4333,6 +4352,7 @@ async def auto_scan_ticker(ticker: str):
                 "entry": round(current, 2), "stoploss": round(sl, 2),
                 "targets": [round(current * 1.05, 2), round(current * 1.10, 2), round(current * 1.18, 2)],
                 "confidence": 80,
+                "day_target": calc_day_target(ev),
             })
 
         gs = run_mini_golden_setup(bars)
@@ -4344,6 +4364,7 @@ async def auto_scan_ticker(ticker: str):
                 "entry": round(current, 2), "stoploss": round(sl, 2),
                 "targets": [round(current * m, 2) for m in mult],
                 "confidence": 85,
+                "day_target": calc_day_target(gs),
             })
 
         ai_sig, ai_score = run_mini_ai_indicator(bars)
@@ -4355,6 +4376,7 @@ async def auto_scan_ticker(ticker: str):
                 "entry": round(current, 2), "stoploss": round(sl, 2),
                 "targets": [round(current * m, 2) for m in mult],
                 "confidence": min(int(ai_score), 95),
+                "day_target": calc_day_target(ai_sig),
             })
 
         gz = run_mini_godzilla(bars)
@@ -4366,6 +4388,7 @@ async def auto_scan_ticker(ticker: str):
                 "entry": round(current, 2), "stoploss": round(sl, 2),
                 "targets": [round(current * m, 2) for m in mult],
                 "confidence": 82,
+                "day_target": calc_day_target(gz),
             })
 
         # DEMON confluence
@@ -4377,6 +4400,7 @@ async def auto_scan_ticker(ticker: str):
                 "stoploss": float(demon["stop_loss"]) if demon.get("stop_loss") else round(current * 0.95, 2),
                 "targets": [float(t) for t in demon.get("targets", [])] if demon.get("targets") else [round(current * 1.05, 2)],
                 "confidence": int(demon.get("confidence", 70)),
+                "day_target": calc_day_target(demon["signal_type"]),
             })
 
         # SMC (Smart Money Concepts)
@@ -4391,6 +4415,7 @@ async def auto_scan_ticker(ticker: str):
                 "stoploss": smc_sl,
                 "targets": [smc_tp1, smc_tp2],
                 "confidence": smc_result.get("confidence", 65),
+                "day_target": calc_day_target(smc_result["signal_type"]),
             })
 
         # AMDS-Hybrid
@@ -4405,6 +4430,7 @@ async def auto_scan_ticker(ticker: str):
                 "stoploss": amds_sl,
                 "targets": [amds_tp1, amds_tp2],
                 "confidence": amds_result.get("confidence", 60),
+                "day_target": calc_day_target(amds_result["signal_type"]),
             })
 
         # PAC + S&O Matrix
@@ -4420,6 +4446,7 @@ async def auto_scan_ticker(ticker: str):
                 "stoploss": pac_sl,
                 "targets": [pac_tp1, pac_tp2, pac_tp3],
                 "confidence": pac_result.get("confidence", 65),
+                "day_target": calc_day_target(pac_result["signal_type"]),
             })
 
         # MiroFish Swarm Intelligence (cached 5 min to avoid excessive LLM calls)
@@ -4440,6 +4467,7 @@ async def auto_scan_ticker(ticker: str):
                         "stoploss": float(mf_result.get('stop_loss', current * 0.97)),
                         "targets": [float(t) for t in mf_result.get('targets', [])],
                         "confidence": int(mf_result.get('confidence', 65)),
+                        "day_target": float(mf_result['day_target']) if mf_result.get('day_target') else calc_day_target(mf_result['signal_type']),
                     }
                     cache_storage[mf_cache_key] = {
                         "data": {"signal_type": mf_result['signal_type'], "signal": mf_signal},

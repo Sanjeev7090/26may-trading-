@@ -91,6 +91,13 @@ const SignalPopup = ({ signal, ticker, isCrypto, onClose }) => {
             </div>
           </div>
 
+          {signal.day_target && (
+            <div className="flex items-center justify-between bg-[#00BCD4]/8 border border-[#00BCD4]/25 rounded px-2 py-1">
+              <span className="text-[8px] font-bold text-[#00BCD4] uppercase tracking-wider">1D Target</span>
+              <span className="text-xs font-black font-mono text-[#00BCD4]">{isCrypto ? '$' : ''}{signal.day_target}</span>
+            </div>
+          )}
+
           {signal.targets?.length > 0 && (
             <div className="flex gap-1">
               {signal.targets.map((t, i) => (
@@ -366,6 +373,17 @@ const AutoScanner = ({ selectedStock }) => {
                       <span className="text-zinc-400">Entry: <span className="text-white">{isCrypto ? '$' : ''}{sig.entry}</span></span>
                       <span className="text-zinc-400">SL: <span className="text-red-400">{isCrypto ? '$' : ''}{sig.stoploss}</span></span>
                     </div>
+
+                    {/* Day Target — highlighted separately */}
+                    {sig.day_target && (
+                      <div className="mt-1.5 flex items-center gap-1.5 bg-[#00BCD4]/8 border border-[#00BCD4]/20 rounded px-1.5 py-1">
+                        <span className="text-[8px] font-bold text-[#00BCD4] uppercase tracking-wider">1D Target</span>
+                        <span className="text-[10px] font-black font-mono text-[#00BCD4]" data-testid={`day-target-${idx}`}>
+                          {isCrypto ? '$' : ''}{sig.day_target}
+                        </span>
+                      </div>
+                    )}
+
                     {sig.targets?.length > 0 && (
                       <div className="flex gap-1 mt-1">
                         {sig.targets.map((t, i) => (
