@@ -25,6 +25,7 @@ import AutoScanner from './AutoScanner';
 import SMCAnalysis from './SMCAnalysis';
 import AMDSAnalysis from './AMDSAnalysis';
 import MiroFishAnalysis from './MiroFishAnalysis';
+import PACSOAnalysis from './PACSOAnalysis';
 import StockNewsPopup from './StockNewsPopup';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper } from '@phosphor-icons/react';
@@ -348,6 +349,7 @@ const TradingDashboard = () => {
                     <SMCAnalysis stockData={stockData} selectedStock={selectedStock} />
                     <AMDSAnalysis stockData={stockData} selectedStock={selectedStock} />
                     <MiroFishAnalysis stockData={stockData} selectedStock={selectedStock} />
+                    <PACSOAnalysis stockData={stockData} selectedStock={selectedStock} />
                     <GPTAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <AITradeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
                     <FallingKnifeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />

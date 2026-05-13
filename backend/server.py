@@ -269,6 +269,49 @@ class AMDSAnalysisResponse(BaseModel):
     recommendation: str
 
 # ======================= MIROFISH MODELS =======================
+
+# PAC + S&O Matrix Models
+class PACSORequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    timeframe: Optional[str] = "15M"
+
+class PACSOModule(BaseModel):
+    module: str
+    status: str
+    detail: str
+    sub_signals: List[str] = []
+
+class PACSOResponse(BaseModel):
+    status: str
+    signal_type: str
+    structure_bias: str
+    bos_detected: bool = False
+    choch_detected: bool = False
+    choch_plus: bool = False
+    order_block_zone: Optional[str] = None
+    order_block_type: Optional[str] = None
+    liquidity_swept: bool = False
+    fvg_zone: Optional[str] = None
+    premium_discount: str = "NEUTRAL"
+    signal_strength: Optional[str] = None
+    neo_cloud_trend: Optional[str] = None
+    smart_trail_level: Optional[str] = None
+    money_flow: Optional[str] = None
+    divergence: Optional[str] = None
+    momentum_state: Optional[str] = None
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    tp1: Optional[str] = None
+    tp2: Optional[str] = None
+    tp3: Optional[str] = None
+    risk_reward: Optional[str] = None
+    atr_value: Optional[float] = None
+    confluence_score: int = 0
+    modules: List[PACSOModule] = []
+    confidence: int = 0
+    recommendation: str
+
 class MiroFishRequest(BaseModel):
     ticker: str
     bars: List[dict]
@@ -2747,6 +2790,550 @@ async def analyze_smc(request: SMCAnalysisRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ======================= PAC + S&O MATRIX (High Confluence) =======================
+
+def _pac_calc_ema(closes, period):
+    if len(closes) < period:
+        return sum(closes) / len(closes) if closes else 0
+    mult = 2 / (period + 1)
+    ema = sum(closes[:period]) / period
+    for c in closes[period:]:
+        ema = (c - ema) * mult + ema
+    return ema
+
+def _pac_calc_atr(bars, period=14):
+    if len(bars) < 2:
+        return 0
+    trs = []
+    for i in range(1, len(bars)):
+        h, l, pc = bars[i]['high'], bars[i]['low'], bars[i-1]['close']
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if not trs:
+        return 0
+    return sum(trs[-period:]) / min(len(trs), period)
+
+def _pac_detect_structure(highs, lows, closes):
+    """Detect BOS, CHoCH, CHoCH+ from swing points"""
+    n = len(highs)
+    if n < 10:
+        return "NEUTRAL", False, False, False
+
+    # Find swing points (simple 3-bar pivot)
+    swing_highs, swing_lows = [], []
+    for i in range(2, n - 2):
+        if highs[i] >= highs[i-1] and highs[i] >= highs[i-2] and highs[i] >= highs[i+1] and highs[i] >= highs[i+2]:
+            swing_highs.append((i, highs[i]))
+        if lows[i] <= lows[i-1] and lows[i] <= lows[i-2] and lows[i] <= lows[i+1] and lows[i] <= lows[i+2]:
+            swing_lows.append((i, lows[i]))
+
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return "NEUTRAL", False, False, False
+
+    # Check recent swing structure
+    last_sh = swing_highs[-1][1]
+    prev_sh = swing_highs[-2][1]
+    last_sl = swing_lows[-1][1]
+    prev_sl = swing_lows[-2][1]
+
+    hh = last_sh > prev_sh
+    hl = last_sl > prev_sl
+    lh = last_sh < prev_sh
+    ll = last_sl < prev_sl
+
+    bos = False
+    choch = False
+    choch_plus = False
+
+    if hh and hl:
+        # Bullish structure — check for BOS (break above prev swing high)
+        if closes[-1] > prev_sh:
+            bos = True
+        bias = "BULLISH"
+    elif lh and ll:
+        # Bearish structure — BOS below prev swing low
+        if closes[-1] < prev_sl:
+            bos = True
+        bias = "BEARISH"
+    elif hh and ll:
+        # Mixed — possible CHoCH
+        choch = True
+        bias = "BULLISH" if closes[-1] > (last_sh + last_sl) / 2 else "BEARISH"
+    elif lh and hl:
+        choch = True
+        bias = "BEARISH" if closes[-1] < (last_sh + last_sl) / 2 else "BULLISH"
+    else:
+        bias = "NEUTRAL"
+
+    # CHoCH+ = strong reversal: previous was trending one way, now broke structure opposite
+    if choch and abs(closes[-1] - closes[-5]) / closes[-5] > 0.008:
+        choch_plus = True
+
+    return bias, bos, choch, choch_plus
+
+def _pac_find_order_blocks(bars, bias):
+    """Find Volumetric Order Blocks (high volume candles at reversal points)"""
+    n = len(bars)
+    if n < 10:
+        return None, None
+
+    volumes = [b.get('volume', 0) for b in bars]
+    avg_vol = sum(volumes[-20:]) / max(len(volumes[-20:]), 1) if volumes else 1
+
+    ob_zone = None
+    ob_type = None
+
+    # Scan last 15 bars for order blocks
+    for i in range(max(n - 15, 1), n - 1):
+        vol = bars[i].get('volume', 0)
+        body = abs(bars[i]['close'] - bars[i]['open'])
+        candle_range = bars[i]['high'] - bars[i]['low']
+        if candle_range == 0:
+            continue
+        body_ratio = body / candle_range
+
+        # High volume + strong body = potential OB
+        if vol > avg_vol * 1.2 and body_ratio > 0.5:
+            if bias == "BULLISH" and bars[i]['close'] > bars[i]['open']:
+                # Bullish OB = demand zone
+                ob_zone = (bars[i]['low'], bars[i]['open'])
+                ob_type = "BULLISH_OB"
+            elif bias == "BEARISH" and bars[i]['close'] < bars[i]['open']:
+                # Bearish OB = supply zone
+                ob_zone = (bars[i]['open'], bars[i]['high'])
+                ob_type = "BEARISH_OB"
+
+    return ob_zone, ob_type
+
+def _pac_detect_liquidity_sweep(highs, lows):
+    """Detect liquidity grabs: equal highs/lows broken then reversed"""
+    n = len(highs)
+    if n < 10:
+        return False
+
+    # Check for equal lows/highs then sweep
+    tolerance = 0.003  # 0.3%
+
+    # Check recent equal lows swept
+    for i in range(n - 8, n - 3):
+        for j in range(i + 1, min(i + 4, n - 2)):
+            if abs(lows[i] - lows[j]) / lows[i] < tolerance:
+                # Equal lows found — check if swept then bounced
+                for k in range(j + 1, min(j + 3, n)):
+                    if lows[k] < min(lows[i], lows[j]) and highs[k] > lows[i]:
+                        return True
+
+    # Check equal highs swept
+    for i in range(n - 8, n - 3):
+        for j in range(i + 1, min(i + 4, n - 2)):
+            if abs(highs[i] - highs[j]) / highs[i] < tolerance:
+                for k in range(j + 1, min(j + 3, n)):
+                    if highs[k] > max(highs[i], highs[j]) and lows[k] < highs[i]:
+                        return True
+
+    return False
+
+def _pac_find_fvg(bars):
+    """Find Fair Value Gaps (3-candle imbalances)"""
+    n = len(bars)
+    if n < 5:
+        return None
+
+    # Check last 10 bars for FVG
+    for i in range(max(n - 10, 2), n - 1):
+        # Bullish FVG: bar[i-2] high < bar[i] low (gap up)
+        if bars[i]['low'] > bars[i-2]['high']:
+            return (bars[i-2]['high'], bars[i]['low'])
+        # Bearish FVG: bar[i-2] low > bar[i] high (gap down)
+        if bars[i]['high'] < bars[i-2]['low']:
+            return (bars[i]['high'], bars[i-2]['low'])
+
+    return None
+
+def _pac_premium_discount(closes, highs, lows):
+    """Calculate if price is in Premium or Discount zone"""
+    n = len(closes)
+    if n < 20:
+        return "NEUTRAL"
+    recent_high = max(highs[-20:])
+    recent_low = min(lows[-20:])
+    mid = (recent_high + recent_low) / 2
+    current = closes[-1]
+    if current < mid - (mid - recent_low) * 0.3:
+        return "DISCOUNT"
+    elif current > mid + (recent_high - mid) * 0.3:
+        return "PREMIUM"
+    return "EQUILIBRIUM"
+
+def _so_signal_confirmation(closes, highs, lows, ema_fast, ema_slow):
+    """S&O: Generate confirmation signals based on trend + retracement"""
+    current = closes[-1]
+    prev = closes[-2] if len(closes) > 1 else current
+
+    above_cloud = current > ema_fast and current > ema_slow
+    below_cloud = current < ema_fast and current < ema_slow
+    trend_up = ema_fast > ema_slow
+    trend_down = ema_fast < ema_slow
+
+    # Check for retracement to EMA then bounce
+    near_ema = abs(current - ema_fast) / ema_fast < 0.005
+    bounce_up = prev < ema_fast and current > ema_fast
+    bounce_down = prev > ema_fast and current < ema_fast
+
+    signal = None
+    strength = None
+
+    if trend_up and above_cloud:
+        if bounce_up or near_ema:
+            signal = "BUY"
+            strength = "STRONG+" if (current - prev) / prev > 0.003 else "NORMAL"
+        elif current > prev:
+            signal = "BUY"
+            strength = "NORMAL"
+    elif trend_down and below_cloud:
+        if bounce_down or near_ema:
+            signal = "SELL"
+            strength = "STRONG+" if (prev - current) / prev > 0.003 else "NORMAL"
+        elif current < prev:
+            signal = "SELL"
+            strength = "NORMAL"
+
+    cloud_trend = "BULLISH" if above_cloud else "BEARISH" if below_cloud else "NEUTRAL"
+    return signal, strength, cloud_trend
+
+def _so_smart_trail(bars, atr):
+    """S&O: Smart Trail calculation (ATR-based trailing stop)"""
+    if not bars or atr == 0:
+        return None
+    current = bars[-1]['close']
+    bullish = bars[-1]['close'] > bars[-1]['open']
+    if bullish:
+        return round(current - atr * 1.5, 2)
+    else:
+        return round(current + atr * 1.5, 2)
+
+def _oscillator_matrix(closes, volumes):
+    """Oscillator Matrix: Money Flow, Divergence, Momentum"""
+    n = len(closes)
+
+    # Smart Money Flow (simplified OBV direction)
+    money_flow = "NEUTRAL"
+    if n >= 10:
+        obv = 0
+        obv_vals = []
+        for i in range(1, n):
+            if closes[i] > closes[i-1]:
+                obv += volumes[i] if i < len(volumes) else 0
+            elif closes[i] < closes[i-1]:
+                obv -= volumes[i] if i < len(volumes) else 0
+            obv_vals.append(obv)
+        if len(obv_vals) >= 5:
+            recent_obv = obv_vals[-1]
+            past_obv = obv_vals[-5]
+            if recent_obv > past_obv * 1.05:
+                money_flow = "BULLISH"
+            elif recent_obv < past_obv * 0.95:
+                money_flow = "BEARISH"
+
+    # RSI for momentum
+    rsi = 50
+    if n >= 15:
+        gains, losses_a = [], []
+        for j in range(1, min(15, n)):
+            d = closes[-j] - closes[-j-1]
+            if d > 0:
+                gains.append(d)
+            else:
+                losses_a.append(abs(d))
+        avg_g = sum(gains) / 14 if gains else 0.001
+        avg_l = sum(losses_a) / 14 if losses_a else 0.001
+        rs = avg_g / avg_l if avg_l > 0 else 1
+        rsi = 100 - (100 / (1 + rs))
+
+    momentum = "OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "STRONG" if 45 < rsi < 65 else "NEUTRAL"
+
+    # Divergence detection (price vs RSI direction)
+    divergence = None
+    if n >= 20:
+        price_trend = closes[-1] - closes[-10]
+        # Simple RSI trend comparison
+        rsi_now = rsi
+        # Approx old RSI
+        gains2, losses2 = [], []
+        for j in range(10, min(24, n)):
+            d = closes[-j] - closes[-j-1] if j+1 < n else 0
+            if d > 0:
+                gains2.append(d)
+            else:
+                losses2.append(abs(d))
+        avg_g2 = sum(gains2) / 14 if gains2 else 0.001
+        avg_l2 = sum(losses2) / 14 if losses2 else 0.001
+        rs2 = avg_g2 / avg_l2 if avg_l2 > 0 else 1
+        rsi_old = 100 - (100 / (1 + rs2))
+
+        rsi_trend = rsi_now - rsi_old
+
+        if price_trend < 0 and rsi_trend > 5:
+            divergence = "BULLISH_DIVERGENCE"
+        elif price_trend > 0 and rsi_trend < -5:
+            divergence = "BEARISH_DIVERGENCE"
+
+    return money_flow, divergence, momentum, rsi
+
+
+def run_full_pac_so_analysis(bars):
+    """Full PAC + S&O Matrix High Confluence Analysis"""
+    n = len(bars)
+    if n < 30:
+        return {
+            "status": "INSUFFICIENT_DATA", "signal_type": "WAIT",
+            "structure_bias": "NEUTRAL", "confluence_score": 0,
+            "modules": [], "confidence": 0,
+            "recommendation": "Need at least 30 bars (15M timeframe recommended)"
+        }
+
+    closes = [b['close'] for b in bars]
+    highs = [b['high'] for b in bars]
+    lows = [b['low'] for b in bars]
+    volumes = [b.get('volume', 0) for b in bars]
+    current = closes[-1]
+
+    atr = _pac_calc_atr(bars, 14)
+    ema_9 = _pac_calc_ema(closes, 9)
+    ema_21 = _pac_calc_ema(closes, 21)
+    ema_50 = _pac_calc_ema(closes, min(50, n - 1))
+
+    modules = []
+    confluence = 0
+
+    # ============ MODULE 1: PAC — Structure + Bias + Entry Zone ============
+    bias, bos, choch, choch_plus = _pac_detect_structure(highs, lows, closes)
+    ob_zone, ob_type = _pac_find_order_blocks(bars, bias)
+    liq_swept = _pac_detect_liquidity_sweep(highs, lows)
+    fvg = _pac_find_fvg(bars)
+    pd_zone = _pac_premium_discount(closes, highs, lows)
+
+    pac_signals = []
+    pac_status = "FAIL"
+
+    if bos:
+        pac_signals.append(f"BOS detected ({bias})")
+        confluence += 15
+    if choch:
+        pac_signals.append(f"CHoCH detected{' (STRONG+)' if choch_plus else ''}")
+        confluence += 20 if choch_plus else 12
+    if ob_zone:
+        pac_signals.append(f"{ob_type}: {ob_zone[0]:.2f} - {ob_zone[1]:.2f}")
+        confluence += 12
+    if liq_swept:
+        pac_signals.append("Liquidity Sweep confirmed")
+        confluence += 10
+    if fvg:
+        pac_signals.append(f"FVG: {fvg[0]:.2f} - {fvg[1]:.2f}")
+        confluence += 8
+    if (bias == "BULLISH" and pd_zone == "DISCOUNT") or (bias == "BEARISH" and pd_zone == "PREMIUM"):
+        pac_signals.append(f"Price in {pd_zone} zone (aligned with {bias} bias)")
+        confluence += 10
+
+    if confluence >= 20:
+        pac_status = "PASS"
+    elif confluence >= 10:
+        pac_status = "PARTIAL"
+
+    modules.append({
+        "module": "PAC (Price Action Concepts)",
+        "status": pac_status,
+        "detail": f"Bias: {bias} | {'BOS' if bos else 'CHoCH+' if choch_plus else 'CHoCH' if choch else 'No structure break'} | Zone: {pd_zone}",
+        "sub_signals": pac_signals,
+    })
+
+    # ============ MODULE 2: S&O — Confirmation + Trend Filter ============
+    so_signal, so_strength, cloud_trend = _so_signal_confirmation(closes, highs, lows, ema_9, ema_21)
+    smart_trail = _so_smart_trail(bars, atr)
+
+    so_signals = []
+    so_status = "FAIL"
+    so_confluence = 0
+
+    if so_signal:
+        so_signals.append(f"{so_signal} Signal ({so_strength})")
+        so_confluence += 18 if so_strength == "STRONG+" else 12
+    if cloud_trend == bias and cloud_trend != "NEUTRAL":
+        so_signals.append(f"Neo Cloud aligned ({cloud_trend})")
+        so_confluence += 10
+    if smart_trail:
+        so_signals.append(f"Smart Trail: {smart_trail}")
+        so_confluence += 5
+
+    # Trend Catcher (EMA50 alignment)
+    if (bias == "BULLISH" and current > ema_50) or (bias == "BEARISH" and current < ema_50):
+        so_signals.append("Trend Catcher aligned with bias")
+        so_confluence += 8
+
+    confluence += so_confluence
+
+    if so_confluence >= 18:
+        so_status = "PASS"
+    elif so_confluence >= 8:
+        so_status = "PARTIAL"
+
+    modules.append({
+        "module": "S&O (Signals & Overlays)",
+        "status": so_status,
+        "detail": f"Signal: {so_signal or 'NONE'} ({so_strength or '-'}) | Cloud: {cloud_trend} | Trail: {smart_trail}",
+        "sub_signals": so_signals,
+    })
+
+    # ============ MODULE 3: Oscillator Matrix — Momentum + Divergence ============
+    money_flow, divergence, momentum, rsi = _oscillator_matrix(closes, volumes)
+
+    osc_signals = []
+    osc_status = "FAIL"
+    osc_confluence = 0
+
+    if money_flow == bias:
+        osc_signals.append(f"Smart Money Flow: {money_flow}")
+        osc_confluence += 12
+    elif money_flow != "NEUTRAL":
+        osc_signals.append(f"Smart Money Flow: {money_flow} (conflicting)")
+
+    if divergence:
+        osc_signals.append(divergence.replace("_", " ").title())
+        if ("BULLISH" in divergence and bias == "BULLISH") or ("BEARISH" in divergence and bias == "BEARISH"):
+            osc_confluence += 15
+        else:
+            osc_confluence += 5
+
+    if momentum == "STRONG":
+        osc_signals.append(f"Momentum: STRONG (RSI: {rsi:.0f})")
+        osc_confluence += 8
+    elif momentum == "OVERBOUGHT" and bias == "BEARISH":
+        osc_signals.append(f"Overbought (RSI: {rsi:.0f}) — aligned")
+        osc_confluence += 10
+    elif momentum == "OVERSOLD" and bias == "BULLISH":
+        osc_signals.append(f"Oversold (RSI: {rsi:.0f}) — aligned")
+        osc_confluence += 10
+    elif momentum in ("OVERBOUGHT", "OVERSOLD"):
+        osc_signals.append(f"{momentum} (RSI: {rsi:.0f}) — caution")
+        osc_confluence -= 5
+
+    confluence += osc_confluence
+
+    if osc_confluence >= 15:
+        osc_status = "PASS"
+    elif osc_confluence >= 5:
+        osc_status = "PARTIAL"
+
+    modules.append({
+        "module": "Oscillator Matrix",
+        "status": osc_status,
+        "detail": f"Money Flow: {money_flow} | Divergence: {divergence or 'None'} | Momentum: {momentum} (RSI: {rsi:.0f})",
+        "sub_signals": osc_signals,
+    })
+
+    # ============ CONFLUENCE DECISION ============
+    pass_count = sum(1 for m in modules if m['status'] == 'PASS')
+    partial_count = sum(1 for m in modules if m['status'] == 'PARTIAL')
+
+    signal_type = "WAIT"
+    entry_price = None
+    sl = None
+    tp1 = tp2 = tp3 = None
+    rr = None
+
+    # High confluence: all 3 modules PASS or 2 PASS + 1 PARTIAL, aligned direction
+    if pass_count >= 2 and (pass_count + partial_count) >= 3:
+        if bias == "BULLISH" and so_signal == "BUY":
+            signal_type = "BUY"
+        elif bias == "BEARISH" and so_signal == "SELL":
+            signal_type = "SELL"
+        elif bias == "BULLISH" and so_signal is None and pass_count == 3:
+            signal_type = "BUY"
+        elif bias == "BEARISH" and so_signal is None and pass_count == 3:
+            signal_type = "SELL"
+    elif pass_count >= 2:
+        if bias == "BULLISH":
+            signal_type = "BUY"
+        elif bias == "BEARISH":
+            signal_type = "SELL"
+
+    if signal_type == "BUY":
+        entry_price = current
+        sl = min(lows[-5:]) - atr * 0.3
+        if ob_zone and ob_type == "BULLISH_OB":
+            sl = min(sl, ob_zone[0] - atr * 0.2)
+        risk = entry_price - sl
+        tp1 = entry_price + risk * 1.5
+        tp2 = entry_price + risk * 2.5
+        tp3 = entry_price + risk * 3.5
+        rr = f"1:{round(risk * 2.5 / risk, 1)}" if risk > 0 else "1:2.5"
+    elif signal_type == "SELL":
+        entry_price = current
+        sl = max(highs[-5:]) + atr * 0.3
+        if ob_zone and ob_type == "BEARISH_OB":
+            sl = max(sl, ob_zone[1] + atr * 0.2)
+        risk = sl - entry_price
+        tp1 = entry_price - risk * 1.5
+        tp2 = entry_price - risk * 2.5
+        tp3 = entry_price - risk * 3.5
+        rr = f"1:{round(risk * 2.5 / risk, 1)}" if risk > 0 else "1:2.5"
+
+    confidence = min(confluence, 100)
+    if signal_type == "WAIT":
+        rec = f"WAIT — Confluence {confluence}/100. Need all 3 modules (PAC, S&O, Oscillator) aligned. Structure: {bias}, Cloud: {cloud_trend}, Flow: {money_flow}"
+    else:
+        rec = f"{signal_type} — {confluence}/100 confluence. {bias} structure + {so_strength or 'Normal'} S&O signal + {money_flow} flow. Entry at {entry_price:.2f}, SL at {sl:.2f}. Trail with Smart Trail at {smart_trail}."
+
+    return {
+        "status": "SIGNAL" if signal_type != "WAIT" else "SCANNING",
+        "signal_type": signal_type,
+        "structure_bias": bias,
+        "bos_detected": bos,
+        "choch_detected": choch,
+        "choch_plus": choch_plus,
+        "order_block_zone": f"{ob_zone[0]:.2f} - {ob_zone[1]:.2f}" if ob_zone else None,
+        "order_block_type": ob_type,
+        "liquidity_swept": liq_swept,
+        "fvg_zone": f"{fvg[0]:.2f} - {fvg[1]:.2f}" if fvg else None,
+        "premium_discount": pd_zone,
+        "signal_strength": so_strength,
+        "neo_cloud_trend": cloud_trend,
+        "smart_trail_level": str(smart_trail) if smart_trail else None,
+        "money_flow": money_flow,
+        "divergence": divergence.replace("_", " ").title() if divergence else None,
+        "momentum_state": momentum,
+        "entry_price": f"{entry_price:.2f}" if entry_price else None,
+        "stop_loss": f"{sl:.2f}" if sl else None,
+        "tp1": f"{tp1:.2f}" if tp1 else None,
+        "tp2": f"{tp2:.2f}" if tp2 else None,
+        "tp3": f"{tp3:.2f}" if tp3 else None,
+        "risk_reward": rr,
+        "atr_value": round(atr, 2),
+        "confluence_score": confluence,
+        "modules": modules,
+        "confidence": confidence,
+        "recommendation": rec,
+    }
+
+
+@api_router.post("/pac-so/analyze", response_model=PACSOResponse)
+async def analyze_pac_so(request: PACSORequest):
+    """PAC + S&O Matrix High Confluence Analysis"""
+    try:
+        bars = request.bars
+        if len(bars) < 30:
+            return PACSOResponse(
+                status="INSUFFICIENT_DATA", signal_type="WAIT",
+                structure_bias="NEUTRAL", premium_discount="NEUTRAL",
+                confluence_score=0, modules=[], confidence=0,
+                recommendation="Need at least 30 bars (15M timeframe recommended)"
+            )
+        result = run_full_pac_so_analysis(bars)
+        return PACSOResponse(**result)
+    except Exception as e:
+        logging.error(f"PAC+S&O analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ======================= AMDS-HYBRID (Adaptive Momentum + Smart Money) =======================
 
 def _amds_calc_ema(closes, period):
@@ -3818,6 +4405,21 @@ async def auto_scan_ticker(ticker: str):
                 "stoploss": amds_sl,
                 "targets": [amds_tp1, amds_tp2],
                 "confidence": amds_result.get("confidence", 60),
+            })
+
+        # PAC + S&O Matrix
+        pac_result = run_full_pac_so_analysis(bars)
+        if pac_result.get("signal_type") != "WAIT":
+            pac_sl = float(pac_result["stop_loss"]) if pac_result.get("stop_loss") else round(current * 0.97, 2)
+            pac_tp1 = float(pac_result["tp1"]) if pac_result.get("tp1") else round(current * 1.03, 2)
+            pac_tp2 = float(pac_result["tp2"]) if pac_result.get("tp2") else round(current * 1.06, 2)
+            pac_tp3 = float(pac_result["tp3"]) if pac_result.get("tp3") else round(current * 1.09, 2)
+            signals.append({
+                "strategy": f"PAC+S&O ({pac_result['structure_bias']})", "direction": pac_result["signal_type"],
+                "entry": round(current, 2),
+                "stoploss": pac_sl,
+                "targets": [pac_tp1, pac_tp2, pac_tp3],
+                "confidence": pac_result.get("confidence", 65),
             })
 
         # MiroFish Swarm Intelligence (cached 5 min to avoid excessive LLM calls)
