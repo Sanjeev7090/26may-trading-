@@ -201,7 +201,7 @@ const MiroFishAnalysis = ({ stockData, selectedStock }) => {
             <p className="text-[10px] text-zinc-300 leading-relaxed" data-testid="mirofish-recommendation">{result.recommendation}</p>
           </div>
 
-          <p className="text-[9px] text-zinc-600 font-mono">MiroFish Swarm | {new Date().toLocaleTimeString('en-US')}</p>
+          <p className="text-[9px] text-zinc-600 font-mono">MiroFish Swarm | GPT-4o | {new Date().toLocaleTimeString('en-US')}</p>
         </div>
       )}
     </div>

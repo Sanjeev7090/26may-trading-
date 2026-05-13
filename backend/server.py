@@ -5236,7 +5236,7 @@ Return ONLY valid JSON, no markdown."""
             session_id=f"mirofish-{ticker}-{uuid.uuid4().hex[:8]}",
             system_message="You are MiroFish, a Swarm Intelligence Engine that simulates multiple AI trading agents to form consensus predictions. Always respond with valid JSON only."
         )
-        chat.with_model("anthropic", "claude-sonnet-4-5")
+        chat.with_model("openai", "gpt-4o")
 
         user_message = UserMessage(text=prompt_text)
         response_text = await chat.send_message(user_message)
