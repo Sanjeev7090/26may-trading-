@@ -16,7 +16,9 @@ const ChartPanel = ({
   const [isMovingMode, setIsMovingMode] = useState(false);
 
   const timeframes = [
+    { multiplier: 5, timespan: 'minute', label: '5M' },
     { multiplier: 10, timespan: 'minute', label: '10M' },
+    { multiplier: 15, timespan: 'minute', label: '15M' },
     { multiplier: 30, timespan: 'minute', label: '30M' },
     { multiplier: 1, timespan: 'hour', label: '1H' },
     { multiplier: 4, timespan: 'hour', label: '4H' },

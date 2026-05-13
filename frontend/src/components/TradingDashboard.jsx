@@ -136,7 +136,7 @@ const TradingDashboard = () => {
       setSignal(null);
       if (selectedStock.type === 'CRYPTO') {
         // Map timeframe to crypto days
-        const daysMap = { '10M': 1, '30M': 1, '1H': 1, '4H': 1, '1D': 7, '1W': 30, '1M': 30, '6M': 180, '1Y': 365 };
+        const daysMap = { '5M': 1, '10M': 1, '15M': 1, '30M': 1, '1H': 1, '4H': 1, '1D': 7, '1W': 30, '1M': 30, '6M': 180, '1Y': 365 };
         const days = daysMap[tf.label] || 7;
         setCryptoChartDays(days);
         fetchCryptoData(selectedStock.coin_id, days);
