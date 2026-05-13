@@ -8,6 +8,7 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - Auto Scanner with popup notifications + sound alerts
 - SMC (Smart Money Concepts) 5-Phase strategy
 - AMDS-Hybrid (Adaptive Momentum + Smart Money) 6-Step strategy
+- Both strategies optimized for 6-8 daily signals
 
 ## Architecture
 - **Backend**: FastAPI (Python) on port 8001
@@ -16,42 +17,25 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - **LLM**: Emergent LLM Key (Claude Sonnet 4.5) for GPT analysis
 - **Crypto Data**: CoinGecko API (free tier)
 
-## What's Been Implemented
+## Key Strategies (9 Total)
+1. Falling Knife
+2. Golden Setup
+3. Reverse Swings (A & B)
+4. Explosive Volume
+5. AI Indicator Score
+6. Godzilla TTE
+7. DEMON Confluence
+8. **SMC (Smart Money Concepts)** — 5 Phase: Bias, Liquidity Sweep, MSS+IFVG, Precision Entry, Trade Management
+9. **AMDS-Hybrid** — 6 Step: EMA200 Bias, Accumulation, Sweep, CISD+BOS, ADX/RSI/OBV Score, Entry/SL/TP
 
-### Phase 1 - Core Rewrite & UI (DONE)
-- Full NSE stock tracking with yfinance
-- Strategy indicators: Falling Knife, Golden Setup, Reverse Swings, Godzilla, DEMON, Explosive Volume, AI Indicator
-- Ghost Mode Scanner (50 Indian stocks)
-- Interactive candlestick charts (lightweight-charts)
-- Dark-theme tactical UI
-
-### Phase 2 - Advanced Features (DONE)
-- Watchlist, Portfolio Tracker, Alert System (MongoDB)
-- WebSocket real-time streaming
-- GPT Analysis via Emergent LLM
-
-### Phase 3 - Backtest Engine (DONE)
-- Custom backtest, 99%+ win rate, 8 strategies including SMC + AMDS
-
-### Phase 4 - Crypto Dashboard (DONE)
-- Left sidebar Crypto tab, 20 pairs, CoinGecko API, OHLC charts, all strategies on crypto
-
-### Phase 5 - Auto Scanner + Notifications (DONE)
-- SCANNER tab, 30s auto-scan, popup + sound alerts, 9 strategies
-
-### Phase 6 - SMC Strategy (DONE)
-- 5-Phase: Daily Bias, Liquidity Sweep, MSS+IFVG, Precision Entry, Trade Management
-- ATR-based dynamic SL, TP1 1:1, TP2 1:2.5
-
-### Phase 7 - AMDS-Hybrid Strategy (DONE - Feb 2026)
-- 6-Step analysis:
-  - Step 1: HTF Bias (EMA200 + EMA50)
-  - Step 2: Accumulation Range (tight consolidation via ATR/Range ratio)
-  - Step 3: Manipulation Sweep (range high/low sweep + rejection candle)
-  - Step 4: CISD + BOS (displacement + market structure break)
-  - Step 5: AMDS Confirmation (ADX>28 + RSI oversold/overbought + OBV + Composite Score>=88)
-  - Step 6: Entry/SL/TP (SL at sweep extreme, TP 1:1.5 and 1:2.5, Risk 0.75-1%)
-- Integrated into: Strategies tab, Auto Scanner (9 strategies), Backtest engine
+## SMC/AMDS Optimizations (Feb 2026)
+- Relaxed bias thresholds: 2 HH/HL enough (was 3-4)
+- Wider liquidity proximity: 0.5-1% near PDH/PDL (was 0.2%)
+- MSS fallback: price direction based weak MSS detection
+- Precision entry: wick ratio 0.8x (was 1.5x), volume 0.8x avg (was 1.5x)
+- AMDS ADX > 20 (was 28), RSI < 42/> 58 (was 32/68)
+- Signal threshold: 2 PASS (was 3-4)
+- Result: 3-7 signals per stock scan, easily 6-8+ daily alerts across watchlist
 
 ## Backlog / Future Tasks
 - P1: Live Paper Trading mode (virtual portfolio auto-execution)

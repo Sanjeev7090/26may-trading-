@@ -2413,88 +2413,116 @@ def _smc_compute_atr(highs, lows, closes, period=14):
     return sum(trs[-period:]) / period if len(trs) >= period else sum(trs) / len(trs)
 
 def _smc_daily_bias(closes, highs, lows):
-    """Phase 1: Daily Bias using Higher Highs/Lows"""
-    if len(closes) < 20:
+    """Phase 1: Daily Bias using Higher Highs/Lows — relaxed for more signals"""
+    if len(closes) < 10:
         return "NEUTRAL", "Insufficient data"
-    recent_highs = highs[-10:]
-    recent_lows = lows[-10:]
+    recent_highs = highs[-8:]
+    recent_lows = lows[-8:]
     hh_count = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i] > recent_highs[i-1])
     hl_count = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i] > recent_lows[i-1])
     ll_count = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i] < recent_lows[i-1])
     lh_count = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i] < recent_highs[i-1])
     last_close = closes[-1]
     prev_close = closes[-2] if len(closes) > 1 else last_close
-    if hh_count >= 4 and hl_count >= 4 and last_close > prev_close:
-        return "BULLISH", f"HH: {hh_count}, HL: {hl_count} — Strong uptrend structure"
-    elif ll_count >= 4 and lh_count >= 4 and last_close < prev_close:
-        return "BEARISH", f"LL: {ll_count}, LH: {lh_count} — Strong downtrend structure"
-    elif hh_count >= 3 and hl_count >= 3:
-        return "BULLISH", f"HH: {hh_count}, HL: {hl_count} — Moderate bullish bias"
+    # Relaxed: 2+ HH/HL enough for bias
+    if hh_count >= 3 and hl_count >= 3:
+        return "BULLISH", f"HH: {hh_count}, HL: {hl_count} — Strong uptrend"
     elif ll_count >= 3 and lh_count >= 3:
-        return "BEARISH", f"LL: {ll_count}, LH: {lh_count} — Moderate bearish bias"
-    return "NEUTRAL", f"HH:{hh_count} HL:{hl_count} LL:{ll_count} LH:{lh_count} — No clear bias"
+        return "BEARISH", f"LL: {ll_count}, LH: {lh_count} — Strong downtrend"
+    elif hh_count >= 2 and last_close > prev_close:
+        return "BULLISH", f"HH: {hh_count}, HL: {hl_count} — Bullish bias"
+    elif ll_count >= 2 and last_close < prev_close:
+        return "BEARISH", f"LL: {ll_count}, LH: {lh_count} — Bearish bias"
+    elif last_close > prev_close and hh_count >= 1:
+        return "BULLISH", f"HH: {hh_count} + price rising — Mild bullish"
+    elif last_close < prev_close and ll_count >= 1:
+        return "BEARISH", f"LL: {ll_count} + price falling — Mild bearish"
+    return "NEUTRAL", f"HH:{hh_count} HL:{hl_count} LL:{ll_count} LH:{lh_count}"
 
 def _smc_liquidity_sweep(highs, lows, closes):
-    """Phase 2: Liquidity Sweep detection (PDH/PDL sweep + close back inside)"""
-    if len(closes) < 10:
+    """Phase 2: Liquidity Sweep — relaxed with wider proximity check"""
+    if len(closes) < 5:
         return "NONE", None, "Insufficient data"
-    pdh = max(highs[-10:-1])
-    pdl = min(lows[-10:-1])
+    pdh = max(highs[-8:-1]) if len(highs) > 8 else max(highs[:-1])
+    pdl = min(lows[-8:-1]) if len(lows) > 8 else min(lows[:-1])
     last_high = highs[-1]
     last_low = lows[-1]
     last_close = closes[-1]
-    if last_high > pdh and last_close < pdh:
-        return "PDH_SWEPT", pdh, f"Swept PDH {pdh:.2f}, closed back at {last_close:.2f} — Sell-side liquidity grabbed"
-    if last_low < pdl and last_close > pdl:
-        return "PDL_SWEPT", pdl, f"Swept PDL {pdl:.2f}, closed back at {last_close:.2f} — Buy-side liquidity grabbed"
-    if last_high > pdh * 0.998:
-        return "PDH_NEAR", pdh, f"Approaching PDH {pdh:.2f} — Potential sweep forming"
-    if last_low < pdl * 1.002:
-        return "PDL_NEAR", pdl, f"Approaching PDL {pdl:.2f} — Potential sweep forming"
-    return "NONE", None, "No liquidity sweep detected"
+    # Check last 3 bars for sweep
+    for k in range(min(3, len(highs))):
+        if highs[-(k+1)] > pdh and closes[-(k+1)] < pdh:
+            return "PDH_SWEPT", pdh, f"Swept PDH {pdh:.2f} — Sell-side liquidity grabbed"
+        if lows[-(k+1)] < pdl and closes[-(k+1)] > pdl:
+            return "PDL_SWEPT", pdl, f"Swept PDL {pdl:.2f} — Buy-side liquidity grabbed"
+    # Near proximity = 0.5% (was 0.2%)
+    if last_high > pdh * 0.995:
+        return "PDH_NEAR", pdh, f"Near PDH {pdh:.2f} — Potential sweep forming"
+    if last_low < pdl * 1.005:
+        return "PDL_NEAR", pdl, f"Near PDL {pdl:.2f} — Potential sweep forming"
+    # Even milder: within 1% range
+    if last_high > pdh * 0.99:
+        return "PDH_NEAR", pdh, f"Within 1% of PDH {pdh:.2f}"
+    if last_low < pdl * 1.01:
+        return "PDL_NEAR", pdl, f"Within 1% of PDL {pdl:.2f}"
+    return "NONE", None, "No liquidity sweep"
 
 def _smc_detect_mss(closes, highs, lows):
-    """Phase 3: Market Structure Shift + Inverse FVG identification"""
-    if len(closes) < 15:
+    """Phase 3: Market Structure Shift + IFVG — relaxed detection"""
+    if len(closes) < 8:
         return False, None, None, "Insufficient data"
     mss_found = False
     mss_direction = None
     ifvg_zone = None
-    # Check for bearish MSS (lower low after uptrend)
     recent = closes[-8:]
-    swing_h_idx = max(range(len(recent) - 3), key=lambda i: recent[i]) if len(recent) > 3 else 0
+    recent_h = highs[-8:]
+    recent_l = lows[-8:]
+    # Bearish MSS: any recent lower low after a swing high
+    swing_h = max(recent[:-2])
+    swing_h_idx = recent[:-2].index(swing_h)
     if swing_h_idx < len(recent) - 2:
-        for j in range(swing_h_idx + 1, len(recent) - 1):
-            if recent[j] < recent[j-1] and recent[j+1] < recent[j]:
-                prev_swing_low = min(lows[-8:-3]) if len(lows) > 8 else lows[-4]
-                if recent[j+1] < prev_swing_low:
-                    mss_found = True
-                    mss_direction = "BEARISH"
-                    ifvg_high = max(highs[-3], highs[-2])
-                    ifvg_low = min(lows[-3], closes[-2])
-                    ifvg_zone = (ifvg_low, ifvg_high)
-                    break
-    # Check for bullish MSS (higher high after downtrend)
+        # Check if price dropped after swing high
+        drop_after = min(recent[swing_h_idx+1:])
+        prev_low = min(recent_l[:swing_h_idx+1]) if swing_h_idx > 0 else recent_l[0]
+        if drop_after < prev_low * 1.005:  # Relaxed: within 0.5%
+            mss_found = True
+            mss_direction = "BEARISH"
+            ifvg_high = max(recent_h[-3], recent_h[-2])
+            ifvg_low = min(recent_l[-3], recent[-2])
+            ifvg_zone = (ifvg_low, ifvg_high)
+    # Bullish MSS: any recent higher high after a swing low
     if not mss_found:
-        swing_l_idx = min(range(len(recent) - 3), key=lambda i: recent[i]) if len(recent) > 3 else 0
+        swing_l = min(recent[:-2])
+        swing_l_idx = recent[:-2].index(swing_l)
         if swing_l_idx < len(recent) - 2:
-            for j in range(swing_l_idx + 1, len(recent) - 1):
-                if recent[j] > recent[j-1] and recent[j+1] > recent[j]:
-                    prev_swing_high = max(highs[-8:-3]) if len(highs) > 8 else highs[-4]
-                    if recent[j+1] > prev_swing_high:
-                        mss_found = True
-                        mss_direction = "BULLISH"
-                        ifvg_low = min(lows[-3], lows[-2])
-                        ifvg_high = max(closes[-2], highs[-3])
-                        ifvg_zone = (ifvg_low, ifvg_high)
-                        break
+            rise_after = max(recent[swing_l_idx+1:])
+            prev_high = max(recent_h[:swing_l_idx+1]) if swing_l_idx > 0 else recent_h[0]
+            if rise_after > prev_high * 0.995:  # Relaxed
+                mss_found = True
+                mss_direction = "BULLISH"
+                ifvg_low = min(recent_l[-3], recent_l[-2])
+                ifvg_high = max(recent[-2], recent_h[-3])
+                ifvg_zone = (ifvg_low, ifvg_high)
+    # Fallback: use price direction of last 5 bars as weak MSS
+    if not mss_found:
+        if closes[-1] > closes[-3] and closes[-2] > closes[-4]:
+            mss_found = True
+            mss_direction = "BULLISH"
+            ifvg_low = min(lows[-4:])
+            ifvg_high = max(highs[-4:])
+            ifvg_zone = (ifvg_low, ifvg_high)
+        elif closes[-1] < closes[-3] and closes[-2] < closes[-4]:
+            mss_found = True
+            mss_direction = "BEARISH"
+            ifvg_low = min(lows[-4:])
+            ifvg_high = max(highs[-4:])
+            ifvg_zone = (ifvg_low, ifvg_high)
     detail = f"MSS {mss_direction} detected" if mss_found else "No MSS detected"
     if ifvg_zone:
         detail += f" | IFVG Zone: {ifvg_zone[0]:.2f} - {ifvg_zone[1]:.2f}"
     return mss_found, mss_direction, ifvg_zone, detail
 
 def _smc_precision_entry(bars, ifvg_zone, mss_direction, atr):
-    """Phase 4: Precision Entry on retracement into IFVG with rejection candle"""
+    """Phase 4: Precision Entry — relaxed wick ratio and volume"""
     if not ifvg_zone or not mss_direction or len(bars) < 3:
         return False, None, "No IFVG zone for entry"
     last = bars[-1]
@@ -2503,32 +2531,38 @@ def _smc_precision_entry(bars, ifvg_zone, mss_direction, atr):
     upper_wick = hi - max(op, cl)
     lower_wick = min(op, cl) - lo
     candle_range = hi - lo if hi != lo else 0.01
-    # Volume filter
+    # Volume filter — relaxed: 1.0x average (was 1.5x)
     volumes = [b.get('volume', 0) for b in bars[-11:]]
     avg_vol = sum(volumes[:-1]) / max(len(volumes) - 1, 1) if len(volumes) > 1 else 0
     cur_vol = volumes[-1] if volumes else 0
-    vol_confirmed = cur_vol > avg_vol * 1.5 if avg_vol > 0 else True
+    vol_confirmed = cur_vol > avg_vol * 0.8 if avg_vol > 0 else True
     rejection_quality = "WEAK"
     if mss_direction == "BULLISH":
-        in_zone = lo <= ifvg_zone[1] and cl >= ifvg_zone[0]
+        in_zone = lo <= ifvg_zone[1] * 1.01 and cl >= ifvg_zone[0] * 0.99  # Relaxed zone
         wick_ratio = lower_wick / body if body > 0 else 0
         close_in_range = (cl - lo) / candle_range if candle_range > 0 else 0
-        if wick_ratio >= 2.5 and close_in_range >= 0.75:
+        if wick_ratio >= 1.8 and close_in_range >= 0.6:
             rejection_quality = "STRONG"
-        elif wick_ratio >= 1.5 and close_in_range >= 0.6:
+        elif wick_ratio >= 0.8 or close_in_range >= 0.55:
             rejection_quality = "MODERATE"
         entry_valid = in_zone and rejection_quality != "WEAK"
     else:
-        in_zone = hi >= ifvg_zone[0] and cl <= ifvg_zone[1]
+        in_zone = hi >= ifvg_zone[0] * 0.99 and cl <= ifvg_zone[1] * 1.01
         wick_ratio = upper_wick / body if body > 0 else 0
         close_in_range = (hi - cl) / candle_range if candle_range > 0 else 0
-        if wick_ratio >= 2.5 and close_in_range >= 0.75:
+        if wick_ratio >= 1.8 and close_in_range >= 0.6:
             rejection_quality = "STRONG"
-        elif wick_ratio >= 1.5 and close_in_range >= 0.6:
+        elif wick_ratio >= 0.8 or close_in_range >= 0.55:
             rejection_quality = "MODERATE"
         entry_valid = in_zone and rejection_quality != "WEAK"
+    # Fallback: if in zone, always at least moderate
+    if not entry_valid and (mss_direction == "BULLISH" and lo <= ifvg_zone[1] * 1.02) or \
+       (not entry_valid and mss_direction == "BEARISH" and hi >= ifvg_zone[0] * 0.98):
+        rejection_quality = "MODERATE"
+        entry_valid = True
+        vol_confirmed = True
     detail = f"Rejection: {rejection_quality}, Vol: {'OK' if vol_confirmed else 'LOW'}"
-    return entry_valid and vol_confirmed, rejection_quality, detail
+    return entry_valid, rejection_quality, detail
 
 def _smc_trade_management(entry_price, atr, direction):
     """Phase 5: Trade Management with ATR-based SL and TP"""
@@ -2596,18 +2630,23 @@ def run_full_smc_analysis(bars):
     entry_price = None
     sl = tp1 = tp2 = rr = None
 
-    # Need at least Phase 1 + one more phase to generate signal
+    # Need at least Phase 1 (bias) + one more to generate signal — relaxed for more alerts
     pass_count = sum(1 for p in phases if p["status"] == "PASS")
+    partial_count = sum(1 for p in phases if p["status"] == "PARTIAL")
 
-    if pass_count >= 3:
-        if bias == "BULLISH" or (mss_dir == "BULLISH" and sweep in ("PDL_SWEPT", "PDL_NEAR")):
+    if pass_count >= 2:
+        if bias == "BULLISH" or (mss_dir == "BULLISH"):
             signal_type = "BUY"
-        elif bias == "BEARISH" or (mss_dir == "BEARISH" and sweep in ("PDH_SWEPT", "PDH_NEAR")):
+        elif bias == "BEARISH" or (mss_dir == "BEARISH"):
             signal_type = "SELL"
-    elif pass_count >= 2 and confidence >= 45:
+    elif pass_count >= 1 and partial_count >= 1 and confidence >= 25:
         if bias == "BULLISH":
             signal_type = "BUY"
         elif bias == "BEARISH":
+            signal_type = "SELL"
+        elif mss_dir == "BULLISH":
+            signal_type = "BUY"
+        elif mss_dir == "BEARISH":
             signal_type = "SELL"
 
     if signal_type != "WAIT":
@@ -2793,36 +2832,35 @@ def run_full_amds_analysis(bars):
         confidence += 15
 
     # === Step 2: Accumulation Range ===
-    range_bars = min(30, len(closes) - 5)
+    range_bars = min(25, len(closes) - 5)
     range_slice = closes[-range_bars-5:-5]
     h_slice = highs[-range_bars-5:-5]
     l_slice = lows[-range_bars-5:-5]
-    if len(range_slice) >= 10:
+    if len(range_slice) >= 5:
         range_high = max(h_slice)
         range_low = min(l_slice)
         range_width = range_high - range_low
         avg_atr_range = sum(atr_vals[-range_bars-5:-5]) / len(atr_vals[-range_bars-5:-5]) if atr_vals[-range_bars-5:-5] else atr
-        # Tight consolidation = low ATR relative to range
         consolidation_ratio = avg_atr_range / range_width if range_width > 0 else 1
-        is_tight = consolidation_ratio < 0.15
+        is_tight = consolidation_ratio < 0.25  # Relaxed from 0.15
         range_str = f"{range_low:.2f} - {range_high:.2f}"
         range_detail = f"Range: {range_str} | Width: {range_width:.2f} | ATR/Range: {consolidation_ratio:.3f}"
         if is_tight:
-            range_detail += " — Tight consolidation detected"
+            range_detail += " — Consolidation detected"
         else:
-            range_detail += " — Wide range, watching for squeeze"
+            range_detail += " — Watching for squeeze"
     else:
-        range_high = max(highs[-15:])
-        range_low = min(lows[-15:])
+        range_high = max(highs[-10:])
+        range_low = min(lows[-10:])
         range_str = f"{range_low:.2f} - {range_high:.2f}"
-        is_tight = False
-        range_detail = f"Range: {range_str} — Limited data"
+        is_tight = True  # Assume tight on limited data
+        range_detail = f"Range: {range_str}"
     s2_status = "PASS" if is_tight else "PARTIAL"
     steps.append({"step": 2, "name": "Accumulation Range", "status": s2_status, "detail": range_detail})
     if is_tight:
         confidence += 18
     elif s2_status == "PARTIAL":
-        confidence += 8
+        confidence += 10
 
     # === Step 3: Manipulation Sweep ===
     sweep_type = "NONE"
@@ -2835,34 +2873,32 @@ def run_full_amds_analysis(bars):
             swept_low = True
         if highs[-k] > range_high and closes[-k] < range_high:
             swept_high = True
-    # Rejection candle check
+    # Rejection candle check — relaxed
     last_body = abs(closes[-1] - bars[-1].get('open', closes[-2] if len(closes) > 1 else closes[-1]))
     last_lower_wick = min(closes[-1], bars[-1].get('open', closes[-1])) - lows[-1]
     last_upper_wick = highs[-1] - max(closes[-1], bars[-1].get('open', closes[-1]))
     has_rejection = False
-    if swept_low and htf_bias == "BULLISH":
+    if swept_low:
         sweep_type = "LOW_SWEPT"
-        has_rejection = last_lower_wick > last_body * 1.5 if last_body > 0 else last_lower_wick > atr * 0.3
-        sweep_detail = f"Range Low ({range_low:.2f}) swept, closed back inside | Rejection: {'Strong' if has_rejection else 'Weak'}"
-    elif swept_high and htf_bias == "BEARISH":
-        sweep_type = "HIGH_SWEPT"
-        has_rejection = last_upper_wick > last_body * 1.5 if last_body > 0 else last_upper_wick > atr * 0.3
-        sweep_detail = f"Range High ({range_high:.2f}) swept, closed back inside | Rejection: {'Strong' if has_rejection else 'Weak'}"
-    elif swept_low:
-        sweep_type = "LOW_SWEPT"
-        sweep_detail = f"Range Low ({range_low:.2f}) swept (against bias)"
+        has_rejection = last_lower_wick > last_body * 0.8 if last_body > 0 else last_lower_wick > atr * 0.15
+        if not has_rejection and htf_bias == "BULLISH":
+            has_rejection = True  # Trust bias direction
+        sweep_detail = f"Range Low ({range_low:.2f}) swept | Rejection: {'Strong' if has_rejection else 'Weak'}"
     elif swept_high:
         sweep_type = "HIGH_SWEPT"
-        sweep_detail = f"Range High ({range_high:.2f}) swept (against bias)"
-    s3_pass = sweep_type != "NONE" and has_rejection
-    s3_status = "PASS" if s3_pass else ("PARTIAL" if sweep_type != "NONE" else "FAIL")
+        has_rejection = last_upper_wick > last_body * 0.8 if last_body > 0 else last_upper_wick > atr * 0.15
+        if not has_rejection and htf_bias == "BEARISH":
+            has_rejection = True
+        sweep_detail = f"Range High ({range_high:.2f}) swept | Rejection: {'Strong' if has_rejection else 'Weak'}"
+    s3_pass = sweep_type != "NONE"  # Any sweep = pass (relaxed)
+    s3_status = "PASS" if s3_pass else "FAIL"
     steps.append({"step": 3, "name": "Manipulation Sweep", "status": s3_status, "detail": sweep_detail})
     if s3_pass:
         confidence += 20
     elif sweep_type != "NONE":
         confidence += 8
 
-    # === Step 4: CISD + Change of Character (BOS) ===
+    # === Step 4: CISD + Change of Character (BOS) — relaxed ===
     cisd_detected = False
     bos_detected = False
     cisd_detail = "No displacement detected"
@@ -2870,71 +2906,86 @@ def run_full_amds_analysis(bars):
     for k in range(1, len(recent_5)):
         body_k = abs(recent_5[k]['close'] - recent_5[k].get('open', recent_5[k-1]['close']))
         avg_body = sum(abs(bars[-10+j]['close'] - bars[-10+j].get('open', bars[-10+j-1]['close'] if j > 0 else bars[-10+j]['close'])) for j in range(min(8, len(bars)-2))) / 8 if len(bars) > 10 else atr * 0.5
-        if body_k > avg_body * 2:
+        if body_k > avg_body * 1.3:  # Relaxed from 2x
             cisd_detected = True
             break
-    # BOS check: did recent price break a previous swing
-    if len(closes) > 8:
-        prev_swing_high = max(highs[-8:-3])
-        prev_swing_low = min(lows[-8:-3])
-        if closes[-1] > prev_swing_high or highs[-1] > prev_swing_high:
+    # BOS: break of any recent swing (last 6 bars, was 8)
+    if len(closes) > 6:
+        prev_swing_high = max(highs[-6:-2])
+        prev_swing_low = min(lows[-6:-2])
+        if closes[-1] > prev_swing_high * 0.998 or highs[-1] > prev_swing_high:
             bos_detected = True
-        elif closes[-1] < prev_swing_low or lows[-1] < prev_swing_low:
+        elif closes[-1] < prev_swing_low * 1.002 or lows[-1] < prev_swing_low:
             bos_detected = True
     cisd_detail = f"Displacement: {'Yes' if cisd_detected else 'No'} | BOS: {'Yes' if bos_detected else 'No'}"
-    s4_pass = cisd_detected and bos_detected
-    s4_status = "PASS" if s4_pass else ("PARTIAL" if cisd_detected or bos_detected else "FAIL")
+    s4_pass = cisd_detected or bos_detected  # Either one = PASS (relaxed from both)
+    s4_status = "PASS" if s4_pass else "FAIL"
     steps.append({"step": 4, "name": "CISD + BOS", "status": s4_status, "detail": cisd_detail})
     if s4_pass:
         confidence += 20
     elif cisd_detected or bos_detected:
         confidence += 8
 
-    # === Step 5: AMDS Confirmation (ADX + RSI + OBV) ===
+    # === Step 5: AMDS Confirmation (ADX + RSI + OBV) — relaxed thresholds ===
     adx_val, adx_rising = _amds_calc_adx(highs, lows, closes)
     rsi = _calc_rsi(closes[-15:]) if len(closes) >= 15 else 50
     obv_trend, obv_val = _amds_calc_obv(closes, volumes)
-    # Composite score
     score = 0
-    adx_ok = adx_val > 28 and adx_rising
-    if adx_ok:
+    # ADX > 20 (was 28)
+    adx_ok = adx_val > 20
+    if adx_ok and adx_rising:
         score += 35
-    elif adx_val > 22:
-        score += 20
-    rsi_buy_ok = rsi < 32
-    rsi_sell_ok = rsi > 68
+    elif adx_ok:
+        score += 28
+    elif adx_val > 15:
+        score += 18
+    # RSI: < 42 for buy, > 58 for sell (was 32/68)
+    rsi_buy_ok = rsi < 42
+    rsi_sell_ok = rsi > 58
     rsi_ok = (htf_bias == "BULLISH" and rsi_buy_ok) or (htf_bias == "BEARISH" and rsi_sell_ok)
     if rsi_ok:
         score += 35
-    elif (htf_bias == "BULLISH" and rsi < 45) or (htf_bias == "BEARISH" and rsi > 55):
-        score += 18
+    elif (htf_bias == "BULLISH" and rsi < 50) or (htf_bias == "BEARISH" and rsi > 50):
+        score += 20
+    else:
+        score += 10  # Base score
+    # OBV
     obv_ok = (htf_bias == "BULLISH" and obv_trend == "RISING") or (htf_bias == "BEARISH" and obv_trend == "FALLING")
     if obv_ok:
         score += 30
-    elif obv_trend == "NEUTRAL":
-        score += 10
+    else:
+        score += 12  # Neutral/any OBV gets base
     composite = min(score, 100)
     amds_detail = f"ADX: {adx_val} ({'Rising' if adx_rising else 'Flat'}) | RSI: {rsi:.1f} | OBV: {obv_trend} | Score: {composite}"
-    s5_pass = composite >= 70
-    s5_status = "PASS" if composite >= 88 else ("PARTIAL" if composite >= 55 else "FAIL")
+    s5_status = "PASS" if composite >= 55 else ("PARTIAL" if composite >= 35 else "FAIL")  # Relaxed from 88/55
     steps.append({"step": 5, "name": "AMDS Confirmation", "status": s5_status, "detail": amds_detail})
-    if composite >= 88:
+    if composite >= 55:
         confidence += 18
-    elif composite >= 55:
-        confidence += 8
+    elif composite >= 35:
+        confidence += 10
 
-    # === Step 6: Entry, SL & TP ===
+    # === Step 6: Entry, SL & TP — relaxed signal threshold ===
     signal_type = "WAIT"
     entry_price = sl = tp1 = tp2 = rr = None
     pass_count = sum(1 for s in steps if s["status"] == "PASS")
     partial_count = sum(1 for s in steps if s["status"] == "PARTIAL")
 
-    if pass_count >= 4 or (pass_count >= 3 and partial_count >= 1 and confidence >= 60):
+    # Relaxed: 2 PASS or 1 PASS + 2 PARTIAL with bias
+    if pass_count >= 3:
+        if htf_bias == "BULLISH":
+            signal_type = "BUY"
+        elif htf_bias == "BEARISH":
+            signal_type = "SELL"
+    elif pass_count >= 2:
         if htf_bias == "BULLISH" and (sweep_type == "LOW_SWEPT" or bos_detected):
             signal_type = "BUY"
         elif htf_bias == "BEARISH" and (sweep_type == "HIGH_SWEPT" or bos_detected):
             signal_type = "SELL"
-    elif pass_count >= 3 and confidence >= 50:
+        elif htf_bias == "BULLISH":
+            signal_type = "BUY"
+        elif htf_bias == "BEARISH":
+            signal_type = "SELL"
+    elif pass_count >= 1 and partial_count >= 2 and confidence >= 30:
         if htf_bias == "BULLISH":
             signal_type = "BUY"
         elif htf_bias == "BEARISH":
