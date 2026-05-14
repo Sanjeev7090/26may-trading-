@@ -6481,7 +6481,7 @@ hybrid_router = APIRouter(prefix="/api/hybrid")
 
 @hybrid_router.get("/chart/{symbol}")
 async def h_chart_data(symbol: str, tf: str = "1h"):
-    """OHLCV data for QSC chart — real yfinance for Indian stocks, synthetic for others."""
+    """OHLCV data for QSC chart — real yfinance for Indian stocks AND crypto, synthetic for others."""
     # Interval mapping
     tf_map = {
         "5m":  ("5m",  "1d"),   "15m": ("15m", "5d"),
@@ -6489,6 +6489,38 @@ async def h_chart_data(symbol: str, tf: str = "1h"):
         "1d":  ("1d",  "180d"), "1w":  ("1wk", "2y"),
     }
     yf_interval, yf_period = tf_map.get(tf, ("1h", "30d"))
+
+    # ---- Crypto: use yfinance for proper historical OHLC (BTCUSDT -> BTC-USD) ----
+    crypto_yf_map = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD",
+                     "SOLUSDT": "SOL-USD", "ADAUSDT": "ADA-USD"}
+    if symbol in crypto_yf_map:
+        def _fetch_crypto_yf():
+            import yfinance as _yf
+            tk = _yf.Ticker(crypto_yf_map[symbol])
+            df = tk.history(period=yf_period, interval=yf_interval)
+            bars = []
+            for ts, row in df.iterrows():
+                epoch = int(ts.timestamp())
+                bars.append({"time": epoch, "open": round(float(row["Open"]), 2),
+                              "high": round(float(row["High"]), 2), "low": round(float(row["Low"]), 2),
+                              "close": round(float(row["Close"]), 2),
+                              "volume": int(row.get("Volume", 0) or 0)})
+            return bars
+        loop = asyncio.get_event_loop()
+        try:
+            bars = await asyncio.wait_for(loop.run_in_executor(None, _fetch_crypto_yf), timeout=12.0)
+            if bars:
+                # Overlay live Kraken price on the last bar if available
+                live = _H_LIVE.get(symbol)
+                if live and bars[-1]:
+                    last = bars[-1]
+                    last["close"] = round(float(live), 2)
+                    last["high"] = max(last["high"], last["close"])
+                    last["low"] = min(last["low"], last["close"])
+                return {"symbol": symbol, "tf": tf, "bars": bars, "type": "candlestick"}
+        except Exception as e:
+            logging.warning(f"h_chart_data crypto yfinance err for {symbol}: {e}")
+        # Fallback below if yfinance fails
 
     st = _H_NON_CRYPTO.get(symbol)
 
