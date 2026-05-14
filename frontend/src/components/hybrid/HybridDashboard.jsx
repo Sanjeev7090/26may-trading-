@@ -92,13 +92,25 @@ export default function HybridDashboard({ onBack }) {
   }, []);
 
   const onGenerateSignal = async () => {
+    await onGenerateSignalForSymbol(selectedSymbol);
+  };
+
+  // Called on one-click stock select — generates signal immediately for that symbol
+  const onGenerateSignalForSymbol = async (sym) => {
     setGenLoading(true);
     try {
-      const sig = await generateSignal(selectedSymbol);
+      const sig = await generateSignal(sym);
       setSignals((prev) => [sig, ...prev].slice(0, 10));
-      toast.success(`Signal: ${sig.direction} ${sig.symbol} • conf ${(sig.confidence * 100).toFixed(0)}%`);
+      const assetName = assets.find(a => a.symbol === sym)?.name || sym;
+      toast.success(`Signal: ${sig.direction} ${assetName} • conf ${(sig.confidence * 100).toFixed(0)}%`);
     } catch { toast.error("Signal generation failed"); }
     finally { setGenLoading(false); }
+  };
+
+  // One-click handler: select symbol AND auto-generate signal
+  const handleSelectSymbol = (sym) => {
+    setSelectedSymbol(sym);
+    onGenerateSignalForSymbol(sym);
   };
 
   const onExecute = async (payload) => {
@@ -158,7 +170,7 @@ export default function HybridDashboard({ onBack }) {
       <main className="px-4 lg:px-6 py-5 grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* LEFT */}
         <aside className="lg:col-span-3 flex flex-col gap-4">
-          <HybridWatchlist assets={assets} livePrices={livePrices} selected={selectedSymbol} onSelect={setSelectedSymbol} />
+          <HybridWatchlist assets={assets} livePrices={livePrices} selected={selectedSymbol} onSelect={handleSelectSymbol} />
           <ExecutionPanel symbol={selectedSymbol} onExecute={onExecute} regulatory={regulatory} />
         </aside>
 
@@ -167,7 +179,7 @@ export default function HybridDashboard({ onBack }) {
           <QSCChart
             symbol={selectedSymbol}
             livePrice={livePrices[selectedSymbol]}
-            onChangeSymbol={setSelectedSymbol}
+            onChangeSymbol={handleSelectSymbol}
             options={CRYPTO_OPTIONS}
             allAssets={assets}
           />
@@ -176,6 +188,8 @@ export default function HybridDashboard({ onBack }) {
             signal={signals[0] ?? null}
             livePrice={livePrices[selectedSymbol] ?? assets.find(a => a.symbol === selectedSymbol)?.price ?? 0}
             symbol={selectedSymbol}
+            displayName={assets.find(a => a.symbol === selectedSymbol)?.name ?? selectedSymbol}
+            loading={genLoading}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <OrderBook book={book} />

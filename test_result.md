@@ -147,16 +147,28 @@ frontend:
       - working: true
         agent: "testing"
         comment: "CORRECTED TEST RESULTS: Diagonal cells correctly show DIFFERENT values for each asset (not all the same). FUSED mode: BTC=0.44, ETH=0.03, SOL=0.06, SPY=0.06, QQQ=-0.00. CLASSICAL mode: BTC=0.02, ETH=0.05, SOL=0.06, SPY=0.08, QQQ=-0.03. QUANTUM mode: BTC=-0.01, ETH=0.06, SOL=0.96, SPY=0.03, QQQ=0.03. Values vary as expected (positive, negative, near-zero). BTC tooltip shows 'AUTOCORR LAG-1' with CLASSICAL=0.007, QUANTUM=0.963, FUSED=0.437. All three modes work correctly. Diagonal cells represent autocorrelation lag-1 for each asset, which is why they differ. Feature working as designed."
+  
+  - task: "QSC Trading Card - Stock Name Display and One-Click Functionality"
+    implemented: true
+    working: true
+    file: "frontend/src/components/hybrid/QSCTradingCard.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Comprehensive testing completed. ✓ Stock name display: Shows full stock/crypto names (Bitcoin, Reliance Industries, HDFC Bank) NOT symbols (BTCUSDT, RELIANCE, HDFCBANK). Symbol displayed in smaller text below name as required. ✓ No 'Anchor:' label visible in QSC Trading Card (correctly appears only in QSC Signal Panel). ✓ One-click functionality: Clicking stock in watchlist automatically triggers signal generation with 'Generating...' loading indicator. Signal generated within 6 seconds. ✓ Trading levels: Entry, Stop Loss, Target 1, Target 2 all displayed with percentages and Risk:Reward ratio. ✓ Cartoon character: HappyDancer (BUY signal) displayed correctly with 'BUY! 🚀' text, changes based on signal direction. ✓ No console errors. API requests working correctly. All requirements verified. Screenshots: 01_hybrid_dashboard_initial.png, 02_reliance_selected.png, 03_hdfcbank_selected.png"
 
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 2
+  test_sequence: 3
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Hybrid Dashboard - Correlation Heatmap"
+    - "QSC Trading Card - Stock Name Display and One-Click Functionality"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -166,3 +178,5 @@ agent_communication:
     message: "Cloned https://github.com/Sanjeev7090/double-mode. Verified code is identical between the GitHub repo and this environment (same 94 frontend src files, same backend/server.py, same requirements.txt, same memory/PRD.md). All services started successfully. Backend responding on port 8001, frontend on port 3000. Dependencies installed including emergentintegrations."
   - agent: "testing"
     message: "Tested Correlation Heatmap in Hybrid mode as requested. RESULT: ✓ WORKING CORRECTLY. BTC diagonal cell shows 0.98 (numeric value), not a dash. All diagonal cells show numeric values. Header shows 'Classical × Quantum Kernel'. All three correlation modes (FUSED, CLASSICAL, QUANTUM) work properly. Feature is fully functional with no issues found."
+  - agent: "testing"
+    message: "Tested QSC Trading Card stock name display and one-click functionality. RESULT: ✓ ALL TESTS PASSED. Stock names display correctly (Bitcoin, Reliance Industries, HDFC Bank) instead of symbols. One-click watchlist selection automatically triggers signal generation. Trading levels (Entry, Stop Loss, Targets) display correctly. Cartoon character changes based on signal direction. No 'Anchor:' label in QSC Trading Card. No console errors. All API requests working. Feature is fully functional."

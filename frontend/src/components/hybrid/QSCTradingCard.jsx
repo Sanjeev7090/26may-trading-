@@ -213,15 +213,18 @@ function calcIntradayLevels(symbol, livePrice, direction) {
 /* ─────────────────────────────────────────
    Main Component
 ───────────────────────────────────────── */
-export default function QSCTradingCard({ signal, livePrice, symbol }) {
+export default function QSCTradingCard({ signal, livePrice, symbol, displayName, loading }) {
   const direction = signal?.direction ?? "NEUTRAL";  // LONG | SHORT | NEUTRAL
   const confidence = signal ? Math.round(signal.confidence * 100) : 0;
   const isBuy  = direction === "LONG";
   const isSell = direction === "SHORT";
 
+  // Use displayName if provided, else fallback to symbol
+  const stockName = displayName || symbol || "—";
+
   const levels = useMemo(
     () => (isBuy || isSell) ? calcIntradayLevels(symbol, livePrice, direction) : null,
-    [symbol, livePrice, direction]
+    [symbol, livePrice, direction, isBuy, isSell]
   );
 
   const signalColor = isBuy  ? "#00E676"
@@ -248,7 +251,6 @@ export default function QSCTradingCard({ signal, livePrice, symbol }) {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[9px] font-mono text-neutral-500 uppercase">{symbol}</span>
           {signal && (
             <span
               className="text-[9px] font-bold px-2 py-0.5 rounded-sm font-mono"
@@ -256,6 +258,9 @@ export default function QSCTradingCard({ signal, livePrice, symbol }) {
             >
               CONF {confidence}%
             </span>
+          )}
+          {loading && (
+            <span className="text-[9px] font-mono text-yellow-400 animate-pulse">Generating…</span>
           )}
         </div>
       </div>
@@ -271,71 +276,54 @@ export default function QSCTradingCard({ signal, livePrice, symbol }) {
         </div>
 
         {/* ── Right panel ── */}
-        <div className="flex-1 flex flex-col gap-3">
+        <div className="flex-1 flex flex-col gap-2">
+
+          {/* Stock name — prominently shown */}
+          <div className="flex flex-col gap-0.5">
+            <div
+              className="font-black text-lg leading-tight tracking-tight text-white truncate"
+              data-testid="trading-card-stockname"
+            >
+              {stockName}
+            </div>
+            <div className="text-[9px] font-mono text-neutral-600 uppercase tracking-widest">
+              {symbol}
+            </div>
+          </div>
 
           {/* Big direction label */}
-          <div className="flex items-baseline gap-3">
+          <div>
             <span
-              className="font-black text-5xl leading-none tracking-tighter"
+              className="font-black text-4xl leading-none tracking-tighter"
               style={{ color: signalColor }}
               data-testid="trading-card-direction"
             >
               {isBuy ? "BUY" : isSell ? "SELL" : "WAIT"}
             </span>
-            {signal?.anchor_asset && (
-              <span className="text-[10px] font-mono text-neutral-500">
-                Anchor: <span className="text-neutral-300">{signal.anchor_asset}</span>
-              </span>
-            )}
           </div>
 
           {/* Trading levels */}
           {levels ? (
             <div className="space-y-1.5">
               {/* Entry */}
-              <LevelRow
-                label="ENTRY"
-                value={levels.entry}
-                pct={null}
-                color="#FFFFFF"
-                bg="rgba(255,255,255,0.08)"
-                bold
-              />
+              <LevelRow label="ENTRY"     value={levels.entry} pct={null}                    color="#FFFFFF"  bg="rgba(255,255,255,0.08)" bold />
               {/* SL */}
-              <LevelRow
-                label="STOP LOSS"
-                value={levels.sl}
-                pct={`${levels.slPct}%`}
-                color="#FF5252"
-                bg="rgba(255,82,82,0.08)"
-              />
+              <LevelRow label="STOP LOSS" value={levels.sl}    pct={`${levels.slPct}%`}      color="#FF5252"  bg="rgba(255,82,82,0.08)" />
               {/* T1 */}
-              <LevelRow
-                label="TARGET 1"
-                value={levels.t1}
-                pct={`+${Math.abs(parseFloat(levels.t1Pct)).toFixed(2)}%`}
-                color="#00E676"
-                bg="rgba(0,230,118,0.08)"
-              />
+              <LevelRow label="TARGET 1"  value={levels.t1}    pct={`+${Math.abs(parseFloat(levels.t1Pct)).toFixed(2)}%`} color="#00E676"  bg="rgba(0,230,118,0.08)" />
               {/* T2 */}
-              <LevelRow
-                label="TARGET 2"
-                value={levels.t2}
-                pct={`+${Math.abs(parseFloat(levels.t2Pct)).toFixed(2)}%`}
-                color="#40C4FF"
-                bg="rgba(64,196,255,0.08)"
-              />
+              <LevelRow label="TARGET 2"  value={levels.t2}    pct={`+${Math.abs(parseFloat(levels.t2Pct)).toFixed(2)}%`} color="#40C4FF"  bg="rgba(64,196,255,0.08)" />
               {/* Risk:Reward */}
               <div className="flex items-center gap-2 pt-1 border-t border-white/10">
                 <span className="text-[9px] font-mono uppercase tracking-widest text-neutral-500">Risk:Reward</span>
                 <span className="text-[11px] font-bold font-mono text-yellow-400">1 : {levels.rr}</span>
-                <span className="ml-auto text-[9px] font-mono text-neutral-600">Intraday ATR-based</span>
+                <span className="ml-auto text-[9px] font-mono text-neutral-600">ATR-based</span>
               </div>
             </div>
           ) : (
-            <div className="flex flex-col gap-2 justify-center py-4">
+            <div className="flex flex-col gap-2 justify-center py-3">
               <div className="text-[11px] font-mono text-neutral-500 text-center">
-                Generate a signal to see intraday levels
+                {loading ? "Generating signal…" : "Click any stock to get signal"}
               </div>
               <div className="text-[9px] font-mono text-neutral-700 text-center uppercase tracking-widest">
                 Entry · SL · Target will appear here
