@@ -44,7 +44,7 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - News button in header to reopen news popup
 - **Confluence Score Meter**: 0-100 visual bar in Auto Scanner; color-coded; WEAK/MODERATE/STRONG/VERY STRONG/EXTREME labels
 - **1-Day Target**: ATR-based 1D Target in all 11 strategy signals (cyan badge)
-- **Indian Markets in QSC Engine**: 10 NSE stocks (RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK, WIPRO, SBIN, BAJFINANCE, NIFTY50, SENSEX) via yfinance, live INR prices, separate "Indian Markets" watchlist section, refresh every 60s
+- **QSC Search + Gann Chart**: Search bar in watchlist (filters existing + NSE yfinance live lookup), QSCChart with lightweight-charts candlestick (real OHLCV for Indian, synthetic for crypto/US), Gann Fan overlay, 5M/15M/1H/1D/1W timeframes, `/api/hybrid/chart/{symbol}` + `/api/hybrid/search` endpoints
 
 ## Known Issues
 - CoinGecko Rate Limits (429) - Free tier limitation, cache active

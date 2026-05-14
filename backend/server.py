@@ -6479,7 +6479,118 @@ def _h_compute_corr():
 # ---- Hybrid Router ----
 hybrid_router = APIRouter(prefix="/api/hybrid")
 
-@hybrid_router.get("/assets")
+@hybrid_router.get("/chart/{symbol}")
+async def h_chart_data(symbol: str, tf: str = "1h"):
+    """OHLCV data for QSC chart — real yfinance for Indian stocks, synthetic for others."""
+    # Interval mapping
+    tf_map = {
+        "5m":  ("5m",  "1d"),   "15m": ("15m", "5d"),
+        "1h":  ("1h",  "30d"),  "4h":  ("1h",  "60d"),
+        "1d":  ("1d",  "180d"), "1w":  ("1wk", "2y"),
+    }
+    yf_interval, yf_period = tf_map.get(tf, ("1h", "30d"))
+
+    st = _H_NON_CRYPTO.get(symbol)
+
+    # ---- Indian stocks (real yfinance OHLCV) ----
+    if st and st.get("yf_ticker"):
+        def _fetch_indian():
+            import yfinance as _yf
+            tk = _yf.Ticker(st["yf_ticker"])
+            df = tk.history(period=yf_period, interval=yf_interval)
+            bars = []
+            for ts, row in df.iterrows():
+                epoch = int(ts.timestamp())
+                bars.append({"time": epoch, "open": round(float(row["Open"]), 2),
+                              "high": round(float(row["High"]), 2), "low": round(float(row["Low"]), 2),
+                              "close": round(float(row["Close"]), 2),
+                              "volume": int(row.get("Volume", 0) or 0)})
+            return bars
+        loop = asyncio.get_event_loop()
+        try:
+            bars = await loop.run_in_executor(None, _fetch_indian)
+            return {"symbol": symbol, "tf": tf, "bars": bars, "type": "candlestick"}
+        except Exception as e:
+            logging.warning(f"h_chart_data yfinance err for {symbol}: {e}")
+
+    # ---- Crypto (synthetic OHLC from close history) ----
+    if symbol in _H_HISTORY:
+        hist = _H_HISTORY[symbol][-240:]
+        bars = []
+        for i, pt in enumerate(hist):
+            c = pt["p"]
+            o = hist[i - 1]["p"] if i > 0 else c
+            spread = c * 0.0012
+            h = max(o, c) * (1 + _random.uniform(0, 0.0015))
+            l = min(o, c) * (1 - _random.uniform(0, 0.0015))
+            bars.append({"time": pt["t"] // 1000, "open": round(o, 4), "high": round(h, 4),
+                         "low": round(l, 4), "close": round(c, 4), "volume": int(_random.uniform(1e4, 5e6))})
+        return {"symbol": symbol, "tf": tf, "bars": bars, "type": "candlestick"}
+
+    # ---- US stocks / commodities / macro (synthetic OHLC from history) ----
+    if st:
+        hist = st["history"][-200:]
+        bars = []
+        base_t = int(datetime.now(timezone.utc).timestamp()) - len(hist) * 3600
+        for i, c in enumerate(hist):
+            o = hist[i - 1] if i > 0 else c
+            h = max(o, c) * (1 + _random.uniform(0, 0.001))
+            l = min(o, c) * (1 - _random.uniform(0, 0.001))
+            bars.append({"time": base_t + i * 3600, "open": round(o, 4), "high": round(h, 4),
+                         "low": round(l, 4), "close": round(c, 4), "volume": int(_random.uniform(1e4, 1e7))})
+        return {"symbol": symbol, "tf": tf, "bars": bars, "type": "candlestick"}
+
+    raise HTTPException(404, f"No data for symbol {symbol}")
+
+
+@hybrid_router.get("/search")
+async def h_search(q: str = ""):
+    """Search across all QSC assets + live NSE yfinance lookup."""
+    q = q.strip().upper()
+    results = []
+
+    # 1. Existing assets
+    for sym, st in _H_NON_CRYPTO.items():
+        if q in sym.upper() or q.lower() in st["name"].lower():
+            results.append({"symbol": sym, "name": st["name"],
+                            "asset_class": st["asset_class"], "currency": st.get("currency", "USD"),
+                            "price": st["price"]})
+
+    for sym, name in {"BTCUSDT": "Bitcoin", "ETHUSDT": "Ethereum",
+                      "SOLUSDT": "Solana", "ADAUSDT": "Cardano"}.items():
+        if q in sym or q.lower() in name.lower():
+            results.append({"symbol": sym, "name": name,
+                            "asset_class": "crypto", "currency": "USD",
+                            "price": _H_LIVE.get(sym, 0)})
+
+    # 2. NSE yfinance lookup for unknown symbols
+    if q and len(results) == 0:
+        def _yf_lookup():
+            import yfinance as _yf
+            found = []
+            for suffix in [".NS", ".BO", ""]:
+                try:
+                    info = _yf.Ticker(q + suffix).fast_info
+                    px = getattr(info, "last_price", None)
+                    if px and px > 0:
+                        found.append({"symbol": q, "name": q + suffix,
+                                      "asset_class": "indian" if suffix in (".NS", ".BO") else "stock",
+                                      "currency": "INR" if suffix in (".NS", ".BO") else "USD",
+                                      "price": float(px), "yf": q + suffix})
+                        break
+                except Exception:
+                    continue
+            return found
+        loop = asyncio.get_event_loop()
+        try:
+            nse_results = await loop.run_in_executor(None, _yf_lookup)
+            results.extend(nse_results)
+        except Exception:
+            pass
+
+    return results[:15]
+
+
 async def h_get_assets():
     out = []
     meta = {"BTCUSDT": "Bitcoin", "ETHUSDT": "Ethereum", "SOLUSDT": "Solana", "ADAUSDT": "Cardano"}

@@ -1,25 +1,26 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import {
   Lightning, ArrowsLeftRight, Shield, ChartLineUp, ChartBar,
-  Database, List, ArrowLeft
+  Database, List, ArrowLeft, MagnifyingGlass, X
 } from "@phosphor-icons/react";
 import {
   fetchAssets, fetchPriceSeries, fetchCorrelation, fetchRegulatory,
   fetchPositions, fetchPortfolio, listTrades, listSignals,
   openPriceSocket, executeTrade, closeTrade, generateSignal, fetchOrderBook,
+  hybridApi,
 } from "../../lib/hybridApi";
 import { toast } from "sonner";
 
-import TickerStrip   from "./TickerStrip";
-import LivePriceChart from "./LivePriceChart";
-import OrderBook     from "./OrderBook";
-import QSCSignalPanel    from "./QSCSignalPanel";
+import QSCChart        from "./QSCChart";
+import OrderBook       from "./OrderBook";
+import QSCSignalPanel  from "./QSCSignalPanel";
 import CorrelationHeatmap from "./CorrelationHeatmap";
 import RegulatoryGauge   from "./RegulatoryGauge";
 import PositionsTable    from "./PositionsTable";
 import TradesLog         from "./TradesLog";
 import ExecutionPanel    from "./ExecutionPanel";
 import PortfolioSummary  from "./PortfolioSummary";
+import TickerStrip       from "./TickerStrip";
 
 const CRYPTO_OPTIONS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"];
 
@@ -27,7 +28,6 @@ export default function HybridDashboard({ onBack }) {
   const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
   const [livePrices,  setLivePrices]  = useState({});
   const [assets,      setAssets]      = useState([]);
-  const [series,      setSeries]      = useState([]);
   const [book,        setBook]        = useState(null);
   const [correlation, setCorrelation] = useState({ symbols: [], cells: [] });
   const [regulatory,  setRegulatory]  = useState(null);
@@ -51,11 +51,8 @@ export default function HybridDashboard({ onBack }) {
 
   const refreshChart = useCallback(async () => {
     try {
-      const [s, b] = await Promise.all([
-        fetchPriceSeries(selectedSymbol, 120),
-        fetchOrderBook(selectedSymbol),
-      ]);
-      setSeries(s); setBook(b);
+      const b = await fetchOrderBook(selectedSymbol);
+      setBook(b);
     } catch { /* noop */ }
   }, [selectedSymbol]);
 
@@ -152,12 +149,12 @@ export default function HybridDashboard({ onBack }) {
 
         {/* CENTER */}
         <section className="lg:col-span-6 flex flex-col gap-4">
-          <LivePriceChart
+          <QSCChart
             symbol={selectedSymbol}
-            series={series}
             livePrice={livePrices[selectedSymbol]}
             onChangeSymbol={setSelectedSymbol}
             options={CRYPTO_OPTIONS}
+            allAssets={assets}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <OrderBook book={book} />
@@ -197,6 +194,30 @@ export default function HybridDashboard({ onBack }) {
 
 /* ---- Watchlist sub-component ---- */
 function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
+  const [searchQ, setSearchQ] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const debounceRef = useRef(null);
+
+  const doSearch = useCallback(async (q) => {
+    if (!q.trim()) { setSearchResults([]); return; }
+    setSearchLoading(true);
+    try {
+      const { data } = await hybridApi.get("/search", { params: { q } });
+      setSearchResults(data || []);
+    } catch { setSearchResults([]); }
+    finally { setSearchLoading(false); }
+  }, []);
+
+  const handleSearch = (e) => {
+    const v = e.target.value;
+    setSearchQ(v);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => doSearch(v), 350);
+  };
+
+  const clearSearch = () => { setSearchQ(""); setSearchResults([]); };
+
   const groups = { crypto: [], stock: [], commodity: [], macro: [], indian: [] };
   for (const a of assets) {
     if (groups[a.asset_class]) groups[a.asset_class].push(a);
@@ -224,7 +245,7 @@ function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
             </div>
             <div className="text-right">
               <span className="text-white block" data-testid={`hybrid-price-${a.symbol}`}>
-                {a.currency === 'INR' ? '₹' : ''}{price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {a.currency === "INR" ? "₹" : ""}{price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </span>
               <span style={{ color: up ? "#3366FF" : "#FF3333" }} className="text-[9px]">
                 {up ? "+" : ""}{a.change_24h?.toFixed(2)}%
@@ -237,16 +258,69 @@ function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
   );
 
   return (
-    <div className="qsc-card" data-testid="hybrid-watchlist">
+    <div className="qsc-card overflow-hidden" data-testid="hybrid-watchlist">
       <div className="px-4 py-3 border-b border-white/10 flex items-center gap-2">
         <Database size={13} className="text-neutral-400" />
         <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-400">Watchlist</span>
       </div>
-      <Section label="Crypto"         icon={<ChartLineUp size={11} />}  items={groups.crypto} />
-      <Section label="Equities"       icon={<ChartBar size={11} />}     items={groups.stock} />
-      <Section label="Indian Markets" icon={<span className="text-[9px]">₹</span>} items={groups.indian} />
-      <Section label="Commodities"    icon={<Lightning size={11} />}    items={groups.commodity} />
-      <Section label="Macro"          icon={<Shield size={11} />}       items={groups.macro} />
+
+      {/* Search bar */}
+      <div className="px-3 py-2 border-b border-white/5 relative">
+        <div className="relative">
+          <MagnifyingGlass size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+          <input
+            type="text"
+            value={searchQ}
+            onChange={handleSearch}
+            placeholder="Search symbol or name..."
+            className="w-full bg-white/5 border border-white/10 pl-7 pr-7 py-1.5 text-[10px] font-mono text-white placeholder:text-neutral-600 focus:outline-none focus:border-white/30"
+            data-testid="hybrid-search-input"
+          />
+          {searchQ && (
+            <button onClick={clearSearch} className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white">
+              <X size={10} />
+            </button>
+          )}
+        </div>
+
+        {/* Search results dropdown */}
+        {(searchResults.length > 0 || searchLoading) && (
+          <div className="absolute left-3 right-3 top-full mt-0.5 bg-[#1A1A1A] border border-white/15 z-20 max-h-48 overflow-y-auto" data-testid="hybrid-search-results">
+            {searchLoading && (
+              <div className="px-3 py-2 text-[10px] font-mono text-neutral-500 animate-pulse">Searching...</div>
+            )}
+            {searchResults.map((r, i) => (
+              <button key={i}
+                onClick={() => { onSelect(r.symbol); clearSearch(); }}
+                className="w-full text-left px-3 py-2 hover:bg-white/10 flex items-center justify-between font-mono text-xs border-b border-white/5 last:border-0"
+                data-testid={`search-result-${r.symbol}`}
+              >
+                <div>
+                  <span className="text-white">{r.symbol}</span>
+                  <span className="text-neutral-500 text-[9px] ml-2">{r.name}</span>
+                  <span className={`ml-2 text-[8px] px-1 py-0.5 ${
+                    r.asset_class === "indian" ? "text-orange-400 bg-orange-400/10" :
+                    r.asset_class === "crypto" ? "text-[#3366FF] bg-[#3366FF]/10" :
+                    "text-neutral-400 bg-white/5"
+                  }`}>{r.asset_class?.toUpperCase()}</span>
+                </div>
+                <span className="text-neutral-400 text-[9px]">
+                  {r.currency === "INR" ? "₹" : "$"}{r.price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Asset sections */}
+      <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
+        <Section label="Crypto"         icon={<ChartLineUp size={11} />}                    items={groups.crypto} />
+        <Section label="Indian Markets" icon={<span className="text-[9px]">₹</span>}        items={groups.indian} />
+        <Section label="Equities"       icon={<ChartBar size={11} />}                       items={groups.stock} />
+        <Section label="Commodities"    icon={<Lightning size={11} />}                      items={groups.commodity} />
+        <Section label="Macro"          icon={<Shield size={11} />}                         items={groups.macro} />
+      </div>
     </div>
   );
 }
