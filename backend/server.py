@@ -13,6 +13,7 @@ import math
 import asyncio
 import json
 import httpx
+import websockets
 import yfinance as yf
 import pandas as pd
 from nsepython import nse_optionchain_scrapper, nse_quote_ltp
@@ -5372,6 +5373,39 @@ def _build_daily_summary(trades):
 
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 
+# ---- Kraken WebSocket Config (real-time crypto, no API key needed) ----
+KRAKEN_WS_URL = "wss://ws.kraken.com"
+
+KRAKEN_PAIR_MAP = {
+    "bitcoin":       "XBT/USD",
+    "ethereum":      "ETH/USD",
+    "binancecoin":   "BNB/USD",
+    "solana":        "SOL/USD",
+    "ripple":        "XRP/USD",
+    "cardano":       "ADA/USD",
+    "dogecoin":      "XDG/USD",
+    "polkadot":      "DOT/USD",
+    "avalanche-2":   "AVAX/USD",
+    "chainlink":     "LINK/USD",
+    "tron":          "TRX/USD",
+    "matic-network": "POL/USD",
+    "litecoin":      "LTC/USD",
+    "uniswap":       "UNI/USD",
+    "stellar":       "XLM/USD",
+    "near":          "NEAR/USD",
+    "aptos":         "APT/USD",
+    "sui":           "SUI/USD",
+    "pepe":          "PEPE/USD",
+    "shiba-inu":     "SHIB/USD",
+}
+# Reverse map: kraken pair → coingecko id
+KRAKEN_REVERSE_MAP = {v: k for k, v in KRAKEN_PAIR_MAP.items()}
+# channelID → coin_id (filled at runtime)
+_kraken_channel_map: dict = {}
+
+# Global Kraken live price cache
+binance_live_prices: dict = {}   # coin_id → {price, open, high, low, volume, change_pct}
+
 CRYPTO_PAIRS = [
     {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
     {"id": "ethereum", "symbol": "ETH", "name": "Ethereum"},
@@ -5842,6 +5876,58 @@ Return ONLY valid JSON."""
         raise HTTPException(status_code=500, detail=f"Crypto analysis failed: {str(e)}")
 
 
+@api_router.get("/crypto/binance-prices")
+async def get_binance_live_prices():
+    """Return latest Binance live prices (updated by WS background task)."""
+    if not binance_live_prices:
+        return {"coins": [], "source": "pending", "count": 0}
+    result = []
+    for coin_id, data in binance_live_prices.items():
+        result.append({
+            "coin_id": coin_id,
+            "symbol": data["symbol"],
+            "price": data["price"],
+            "open": data["open"],
+            "high": data["high"],
+            "low": data["low"],
+            "volume": data["volume"],
+            "change_pct": data["change_pct"],
+            "ts": data["ts"],
+        })
+    return {"coins": result, "source": "binance", "count": len(result)}
+
+
+@app.websocket("/api/ws/crypto")
+async def websocket_crypto_stream(websocket: WebSocket):
+    """Push Binance live prices to frontend every 2 seconds."""
+    await websocket.accept()
+    try:
+        while True:
+            if binance_live_prices:
+                coins = []
+                for coin_id, data in binance_live_prices.items():
+                    coins.append({
+                        "coin_id": coin_id,
+                        "symbol": data["symbol"],
+                        "price": data["price"],
+                        "change_pct": data["change_pct"],
+                        "high": data["high"],
+                        "low": data["low"],
+                        "volume": data["volume"],
+                        "ts": data["ts"],
+                    })
+                await websocket.send_json({
+                    "type": "crypto_prices",
+                    "data": coins,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logging.debug(f"Crypto WS client disconnect: {e}")
+
+
 # ======================= STOCK NEWS =======================
 
 @api_router.get("/news/{ticker}")
@@ -6161,3 +6247,84 @@ logger = logging.getLogger(__name__)
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+# ======================= BINANCE WEBSOCKET BACKGROUND TASK =======================
+
+async def _binance_ws_task():
+    """Background task: connect to Kraken public WebSocket and update live prices."""
+    pairs = list(KRAKEN_PAIR_MAP.values())
+    backoff = 5
+
+    while True:
+        try:
+            logging.info("Kraken WS: connecting...")
+            async with websockets.connect(KRAKEN_WS_URL, ping_interval=20, ping_timeout=10) as ws:
+                backoff = 5
+                # Subscribe to ticker for all pairs
+                sub_msg = json.dumps({"event": "subscribe", "pair": pairs, "subscription": {"name": "ticker"}})
+                await ws.send(sub_msg)
+                logging.info("Kraken WS: subscribed to %d pairs", len(pairs))
+
+                async for raw in ws:
+                    try:
+                        msg = json.loads(raw)
+
+                        # Subscription confirmation → map channelID to coin_id
+                        if isinstance(msg, dict):
+                            if msg.get("event") == "subscriptionStatus" and msg.get("status") == "subscribed":
+                                pair_name = msg.get("pair", "")
+                                coin_id = KRAKEN_REVERSE_MAP.get(pair_name)
+                                if coin_id:
+                                    _kraken_channel_map[msg["channelID"]] = coin_id
+                            continue
+
+                        # Price tick: [channelID, {ticker data}, "ticker", "PAIR"]
+                        if isinstance(msg, list) and len(msg) >= 4 and msg[2] == "ticker":
+                            channel_id = msg[0]
+                            tick = msg[1]
+                            pair_name = msg[3]
+                            coin_id = _kraken_channel_map.get(channel_id) or KRAKEN_REVERSE_MAP.get(pair_name)
+                            if not coin_id:
+                                continue
+
+                            # Kraken ticker fields: c=last trade, o=open, h=high, l=low, v=volume
+                            close_p = float(tick["c"][0])
+                            open_p  = float(tick["o"][1])   # today's open
+                            high_p  = float(tick["h"][1])   # today's high
+                            low_p   = float(tick["l"][1])   # today's low
+                            vol     = float(tick["v"][1])   # today's volume
+                            chg_pct = ((close_p - open_p) / open_p * 100) if open_p else 0
+
+                            symbol = KRAKEN_PAIR_MAP.get(coin_id, "").replace("/USD", "")
+                            if symbol == "XBT":
+                                symbol = "BTC"
+                            elif symbol == "XDG":
+                                symbol = "DOGE"
+                            elif symbol == "POL":
+                                symbol = "MATIC"
+
+                            binance_live_prices[coin_id] = {
+                                "price":      close_p,
+                                "open":       open_p,
+                                "high":       high_p,
+                                "low":        low_p,
+                                "volume":     vol,
+                                "change_pct": round(chg_pct, 3),
+                                "symbol":     symbol,
+                                "ts":         datetime.now(timezone.utc).isoformat(),
+                            }
+                    except Exception as parse_err:
+                        logging.debug(f"Kraken WS parse error: {parse_err}")
+
+        except Exception as conn_err:
+            logging.warning(f"Kraken WS disconnected: {conn_err}. Reconnecting in {backoff}s...")
+            _kraken_channel_map.clear()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+
+@app.on_event("startup")
+async def startup_binance_ws():
+    asyncio.create_task(_binance_ws_task())
+    logging.info("Kraken WebSocket background task started")
