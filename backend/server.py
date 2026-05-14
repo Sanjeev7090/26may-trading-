@@ -6545,13 +6545,19 @@ async def h_chart_data(symbol: str, tf: str = "1h"):
 
 @hybrid_router.get("/search")
 async def h_search(q: str = ""):
-    """Search across all QSC assets + live NSE yfinance lookup."""
+    """Search across all QSC assets + live NSE/BSE yfinance lookup for Indian stocks."""
     q = q.strip().upper()
+    if not q:
+        return []
     results = []
+    seen = set()
 
-    # 1. Existing assets
+    # 1. Existing cached assets (instant match)
     for sym, st in _H_NON_CRYPTO.items():
         if q in sym.upper() or q.lower() in st["name"].lower():
+            if sym in seen:
+                continue
+            seen.add(sym)
             results.append({"symbol": sym, "name": st["name"],
                             "asset_class": st["asset_class"], "currency": st.get("currency", "USD"),
                             "price": st["price"]})
@@ -6559,38 +6565,55 @@ async def h_search(q: str = ""):
     for sym, name in {"BTCUSDT": "Bitcoin", "ETHUSDT": "Ethereum",
                       "SOLUSDT": "Solana", "ADAUSDT": "Cardano"}.items():
         if q in sym or q.lower() in name.lower():
+            if sym in seen:
+                continue
+            seen.add(sym)
             results.append({"symbol": sym, "name": name,
                             "asset_class": "crypto", "currency": "USD",
                             "price": _H_LIVE.get(sym, 0)})
 
-    # 2. NSE yfinance lookup for unknown symbols
-    if q and len(results) == 0:
+    # 2. NSE/BSE yfinance lookup -- runs for plausible stock-like queries (2-15 alphanumerics)
+    #    Even when cached results exist, we still attempt a yfinance lookup for the exact
+    #    ticker so any Indian stock can be discovered.
+    exact_cached = any(r["symbol"] == q for r in results)
+    if not exact_cached and 2 <= len(q) <= 15 and q.replace("&", "").replace("-", "").isalnum():
         def _yf_lookup():
             import yfinance as _yf
-            found = []
             for suffix in [".NS", ".BO", ""]:
                 try:
                     info = _yf.Ticker(q + suffix).fast_info
                     px = getattr(info, "last_price", None)
                     if px and px > 0:
-                        found.append({"symbol": q, "name": q + suffix,
-                                      "asset_class": "indian" if suffix in (".NS", ".BO") else "stock",
-                                      "currency": "INR" if suffix in (".NS", ".BO") else "USD",
-                                      "price": float(px), "yf": q + suffix})
-                        break
+                        return {"symbol": q, "name": q + suffix,
+                                "asset_class": "indian" if suffix in (".NS", ".BO") else "stock",
+                                "currency": "INR" if suffix in (".NS", ".BO") else "USD",
+                                "price": float(px), "yf": q + suffix}
                 except Exception:
                     continue
-            return found
+            return None
         loop = asyncio.get_event_loop()
         try:
-            nse_results = await loop.run_in_executor(None, _yf_lookup)
-            results.extend(nse_results)
-        except Exception:
+            hit = await asyncio.wait_for(loop.run_in_executor(None, _yf_lookup), timeout=6.0)
+            if hit and hit["symbol"] not in seen:
+                seen.add(hit["symbol"])
+                # Auto-register yfinance Indian hits into _H_NON_CRYPTO so they appear
+                # in watchlist + chart immediately on click.
+                if hit["asset_class"] == "indian" and hit["symbol"] not in _H_NON_CRYPTO:
+                    _H_NON_CRYPTO[hit["symbol"]] = {
+                        "symbol": hit["symbol"], "name": hit["name"], "asset_class": "indian",
+                        "price": hit["price"], "base_price": hit["price"],
+                        "change_24h": 0.0, "volume": _random.uniform(1e5, 1e7),
+                        "history": [hit["price"]],
+                        "yf_ticker": hit["yf"], "currency": "INR",
+                    }
+                results.append(hit)
+        except (asyncio.TimeoutError, Exception):
             pass
 
     return results[:15]
 
 
+@hybrid_router.get("/assets")
 async def h_get_assets():
     out = []
     meta = {"BTCUSDT": "Bitcoin", "ETHUSDT": "Ethereum", "SOLUSDT": "Solana", "ADAUSDT": "Cardano"}
@@ -6689,10 +6712,12 @@ async def h_regulatory():
     multiplier = max(0.3, min(1.3, 1.0+score*0.4))
     return {"score": score, "label": label, "aggressiveness_multiplier": round(multiplier,3),
             "headlines": [
-                {"src": "FedSpeech", "headline": "Chair signals data-dependent stance", "weight": 0.6},
+                {"src": "FedSpeech", "headline": "Chair signals data-dependent stance on rate path", "weight": 0.6},
                 {"src": "SEC", "headline": "New disclosure rules for digital asset custodians", "weight": -0.3},
-                {"src": "EU MiCA", "headline": "Stablecoin transition window extended", "weight": 0.4},
-                {"src": "G20 Brief", "headline": "Coordinated framework on AI-driven trading", "weight": -0.2},
+                {"src": "SEBI", "headline": "F&O position limits tightened for index derivatives", "weight": -0.4},
+                {"src": "RBI", "headline": "Liquidity window extended; CRR held at 4%", "weight": 0.5},
+                {"src": "EU MiCA", "headline": "Stablecoin transition window extended 6 months", "weight": 0.4},
+                {"src": "NSE", "headline": "Circuit breaker thresholds revised for small-cap segment", "weight": -0.2},
             ], "updated_at": datetime.now(timezone.utc).isoformat()}
 
 @hybrid_router.post("/trades/execute")

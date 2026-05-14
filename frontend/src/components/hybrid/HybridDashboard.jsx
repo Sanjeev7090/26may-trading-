@@ -50,14 +50,17 @@ export default function HybridDashboard({ onBack }) {
   const wsRef = useRef(null);
 
   const refreshAll = useCallback(async () => {
-    try {
-      const [a, c, r, p, port, t, sg] = await Promise.all([
-        fetchAssets(), fetchCorrelation(), fetchRegulatory(),
-        fetchPositions(), fetchPortfolio(), listTrades(), listSignals(),
-      ]);
-      setAssets(a); setCorrelation(c); setRegulatory(r);
-      setPositions(p); setPortfolio(port); setTrades(t); setSignals(sg);
-    } catch { /* noop */ }
+    const [a, c, r, p, port, t, sg] = await Promise.allSettled([
+      fetchAssets(), fetchCorrelation(), fetchRegulatory(),
+      fetchPositions(), fetchPortfolio(), listTrades(), listSignals(),
+    ]);
+    if (a.status === "fulfilled") setAssets(a.value);
+    if (c.status === "fulfilled") setCorrelation(c.value);
+    if (r.status === "fulfilled") setRegulatory(r.value);
+    if (p.status === "fulfilled") setPositions(p.value);
+    if (port.status === "fulfilled") setPortfolio(port.value);
+    if (t.status === "fulfilled") setTrades(t.value);
+    if (sg.status === "fulfilled") setSignals(sg.value);
   }, []);
 
   const refreshChart = useCallback(async () => {
@@ -234,56 +237,61 @@ function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
     if (groups[a.asset_class]) groups[a.asset_class].push(a);
   }
 
-  const Section = ({ label, icon, items }) => (
-    <div className="border-t border-white/5 first:border-t-0">
-      <div className="px-4 py-2 text-[9px] font-bold uppercase tracking-[0.2em] text-neutral-500 flex items-center gap-1.5">
-        {icon}{label}
+  const Section = ({ label, icon, items }) => {
+    if (!items.length) return null;
+    return (
+      <div>
+        <div className="px-4 py-1.5 text-[8px] font-bold uppercase tracking-[0.25em] text-neutral-600 flex items-center gap-1.5 bg-white/[0.015] border-b border-white/5">
+          {icon}<span>{label}</span>
+        </div>
+        {items.map((a) => {
+          const price = livePrices[a.symbol] ?? a.price;
+          const up = (a.change_24h ?? 0) >= 0;
+          const isSel = a.symbol === selected;
+          const isINR = a.currency === "INR";
+          return (
+            <button
+              key={a.symbol}
+              onClick={() => onSelect(a.symbol)}
+              data-testid={`hybrid-watch-${a.symbol}`}
+              className={`w-full text-left px-4 py-2.5 flex items-center justify-between border-b border-white/[0.04] transition-all duration-150 group
+                ${isSel ? "bg-[#3366FF]/10 border-l-2 border-l-[#3366FF]" : "hover:bg-white/5 border-l-2 border-l-transparent"}`}
+            >
+              <div className="min-w-0">
+                <div className="text-[11px] font-bold text-white tracking-tight leading-tight">{a.symbol}</div>
+                <div className="text-[9px] text-neutral-500 truncate mt-0.5">{a.name}</div>
+              </div>
+              <div className="text-right shrink-0 ml-2">
+                <div className="text-[11px] font-mono font-bold text-white leading-tight" data-testid={`hybrid-price-${a.symbol}`}>
+                  {isINR ? "₹" : ""}{price?.toLocaleString('en-IN', { maximumFractionDigits: isINR ? 2 : 4 })}
+                </div>
+                <div className="text-[9px] font-mono mt-0.5" style={{ color: up ? "#3366FF" : "#FF3333" }}>
+                  {up ? "▲" : "▼"} {Math.abs(a.change_24h ?? 0).toFixed(2)}%
+                </div>
+              </div>
+            </button>
+          );
+        })}
       </div>
-      {items.map((a) => {
-        const price = livePrices[a.symbol] ?? a.price;
-        const up = a.change_24h >= 0;
-        const isSel = a.symbol === selected;
-        return (
-          <button
-            key={a.symbol}
-            onClick={() => onSelect(a.symbol)}
-            data-testid={`hybrid-watch-${a.symbol}`}
-            className={`w-full text-left px-4 py-2 flex items-center justify-between font-mono text-xs transition-colors ${isSel ? "bg-white/10" : "hover:bg-white/5"}`}
-          >
-            <div>
-              <span className="text-white block">{a.symbol}</span>
-              <span className="text-neutral-500 text-[9px]">{a.name}</span>
-            </div>
-            <div className="text-right">
-              <span className="text-white block" data-testid={`hybrid-price-${a.symbol}`}>
-                {a.currency === "INR" ? "₹" : ""}{price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-              </span>
-              <span style={{ color: up ? "#3366FF" : "#FF3333" }} className="text-[9px]">
-                {up ? "+" : ""}{a.change_24h?.toFixed(2)}%
-              </span>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
+    );
+  };
 
   return (
-    <div className="qsc-card overflow-hidden" data-testid="hybrid-watchlist">
+    <div className="qsc-card flex flex-col" data-testid="hybrid-watchlist">
       <div className="px-4 py-3 border-b border-white/10 flex items-center gap-2">
         <Database size={13} className="text-neutral-400" />
         <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-400">Watchlist</span>
       </div>
 
       {/* Search bar */}
-      <div className="px-3 py-2 border-b border-white/5 relative">
+      <div className="px-3 py-2 border-b border-white/5 relative" style={{ zIndex: 50 }}>
         <div className="relative">
           <MagnifyingGlass size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500" />
           <input
             type="text"
             value={searchQ}
             onChange={handleSearch}
-            placeholder="Search symbol or name..."
+            placeholder="Search RELIANCE, TCS, BTC..."
             className="w-full bg-white/5 border border-white/10 pl-7 pr-7 py-1.5 text-[10px] font-mono text-white placeholder:text-neutral-600 focus:outline-none focus:border-white/30"
             data-testid="hybrid-search-input"
           />
@@ -296,9 +304,12 @@ function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
 
         {/* Search results dropdown */}
         {(searchResults.length > 0 || searchLoading) && (
-          <div className="absolute left-3 right-3 top-full mt-0.5 bg-[#1A1A1A] border border-white/15 z-20 max-h-48 overflow-y-auto" data-testid="hybrid-search-results">
+          <div className="absolute left-3 right-3 top-full mt-1 bg-[#1A1A1A] border border-white/20 shadow-xl max-h-72 overflow-y-auto" style={{ zIndex: 60 }} data-testid="hybrid-search-results">
             {searchLoading && (
-              <div className="px-3 py-2 text-[10px] font-mono text-neutral-500 animate-pulse">Searching...</div>
+              <div className="px-3 py-2 text-[10px] font-mono text-neutral-500 animate-pulse">Searching NSE / BSE / Crypto...</div>
+            )}
+            {!searchLoading && searchResults.length === 0 && (
+              <div className="px-3 py-2 text-[10px] font-mono text-neutral-500">No matches</div>
             )}
             {searchResults.map((r, i) => (
               <button key={i}
@@ -306,8 +317,8 @@ function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
                 className="w-full text-left px-3 py-2 hover:bg-white/10 flex items-center justify-between font-mono text-xs border-b border-white/5 last:border-0"
                 data-testid={`search-result-${r.symbol}`}
               >
-                <div>
-                  <span className="text-white">{r.symbol}</span>
+                <div className="min-w-0 flex-1">
+                  <span className="text-white font-bold">{r.symbol}</span>
                   <span className="text-neutral-500 text-[9px] ml-2">{r.name}</span>
                   <span className={`ml-2 text-[8px] px-1 py-0.5 ${
                     r.asset_class === "indian" ? "text-orange-400 bg-orange-400/10" :
@@ -315,7 +326,7 @@ function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
                     "text-neutral-400 bg-white/5"
                   }`}>{r.asset_class?.toUpperCase()}</span>
                 </div>
-                <span className="text-neutral-400 text-[9px]">
+                <span className="text-neutral-300 text-[10px] ml-2 shrink-0">
                   {r.currency === "INR" ? "₹" : "$"}{r.price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                 </span>
               </button>
