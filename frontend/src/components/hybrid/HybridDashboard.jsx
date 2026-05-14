@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import QSCChart        from "./QSCChart";
 import OrderBook       from "./OrderBook";
 import QSCSignalPanel  from "./QSCSignalPanel";
+import QSCTradingCard  from "./QSCTradingCard";
 import CorrelationHeatmap from "./CorrelationHeatmap";
 import RegulatoryGauge   from "./RegulatoryGauge";
 import PositionsTable    from "./PositionsTable";
@@ -169,6 +170,12 @@ export default function HybridDashboard({ onBack }) {
             onChangeSymbol={setSelectedSymbol}
             options={CRYPTO_OPTIONS}
             allAssets={assets}
+          />
+          {/* QSC Trading Card — cartoon + intraday levels */}
+          <QSCTradingCard
+            signal={signals[0] ?? null}
+            livePrice={livePrices[selectedSymbol] ?? assets.find(a => a.symbol === selectedSymbol)?.price ?? 0}
+            symbol={selectedSymbol}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <OrderBook book={book} />
