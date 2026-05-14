@@ -6288,13 +6288,26 @@ _H_NON_CRYPTO_ASSETS = {
 }
 
 def _h_init():
+    # Per-class simulation parameters (sigma, drift_speed) for seeding history
+    _SIM_PARAMS = {
+        "stock":     {"sigma": 0.0012, "mean_rev": 0.002},
+        "commodity": {"sigma": 0.0010, "mean_rev": 0.003},
+        "macro":     {"sigma": 0.0006, "mean_rev": 0.001},
+        "indian":    {"sigma": 0.0015, "mean_rev": 0.002},
+    }
     for cls, items in _H_NON_CRYPTO_ASSETS.items():
+        p_cfg = _SIM_PARAMS.get(cls, {"sigma": 0.001, "mean_rev": 0.002})
         for a in items:
+            # Seed 120 historical price points so autocorrelation is computable from startup
+            h, cur = [], float(a["price"])
+            for _ in range(120):
+                cur = cur * (1 + _random.gauss(0, p_cfg["sigma"])) + p_cfg["mean_rev"] * (a["price"] - cur)
+                h.append(round(cur, 4))
             _H_NON_CRYPTO[a["symbol"]] = {
                 "symbol": a["symbol"], "name": a["name"], "asset_class": cls,
                 "price": a["price"], "base_price": a["price"],
                 "change_24h": _random.uniform(-2.5, 2.5),
-                "volume": _random.uniform(1e6, 5e8), "history": [a["price"]],
+                "volume": _random.uniform(1e6, 5e8), "history": h,
                 "yf_ticker": a.get("yf"),   # yfinance symbol (only for indian class)
                 "currency": "INR" if cls == "indian" else "USD",
             }
@@ -6470,9 +6483,26 @@ def _h_compute_corr():
     for i, a in enumerate(_H_ALL_SYMS):
         for b in _H_ALL_SYMS[i:]:
             sa, sb = _h_series(a), _h_series(b)
-            c = _h_pearson(sa, sb)
-            q = _h_quantum_kernel(sa, sb)
-            f = _h_fused(c, q)
+            if a == b:
+                # Diagonal: compute lag-1 return autocorrelation — unique per asset based on actual data.
+                # Classical = Pearson lag-1 autocorr of price returns (momentum vs mean-reversion)
+                # Quantum   = quantum-kernel on returns vs lagged returns (non-linear coherence)
+                # Fused     = weighted blend
+                rets = [
+                    (sa[k] - sa[k-1]) / sa[k-1]
+                    for k in range(1, len(sa)) if sa[k-1] != 0
+                ]
+                if len(rets) >= 5:
+                    c = _h_pearson(rets[:-1], rets[1:])
+                    q = _h_quantum_kernel(rets[:-1], rets[1:])
+                else:
+                    c = 0.0
+                    q = 0.0
+                f = _h_fused(c, q)
+            else:
+                c = _h_pearson(sa, sb)
+                q = _h_quantum_kernel(sa, sb)
+                f = _h_fused(c, q)
             cells.append({"a": a, "b": b, "classical": round(c,3), "quantum": round(q,3), "fused": round(f,3)})
     return cells
 

@@ -155,10 +155,23 @@ export default function CorrelationHeatmap({ data }) {
         {/* Hover tooltip */}
         {hover?.c && (
           <div className="mt-3 pt-3 border-t border-white/10 font-mono text-[10px] text-neutral-300 flex flex-wrap items-center gap-4">
-            <span><span className="text-neutral-500">PAIR</span> <span className="text-white">{hover.row}</span> ↔ <span className="text-white">{hover.col}</span></span>
-            <span><span className="text-neutral-500">CLASSICAL</span> <span style={{ color: colorFor(hover.c.classical ?? 0).includes("255,51") ? "#FF3333" : "#3366FF" }}>{hover.c.classical?.toFixed(3)}</span></span>
-            <span><span className="text-neutral-500">QUANTUM</span> <span style={{ color: colorFor(hover.c.quantum ?? 0).includes("255,51") ? "#FF3333" : "#3366FF" }}>{hover.c.quantum?.toFixed(3)}</span></span>
-            <span><span className="text-neutral-500">FUSED</span> <span className="text-white font-bold">{hover.c.fused?.toFixed(3)}</span></span>
+            {hover.row === hover.col ? (
+              <>
+                <span><span className="text-neutral-500">ASSET</span> <span className="text-white font-bold">{hover.row}</span></span>
+                <span><span className="text-amber-400 font-bold">AUTOCORR LAG-1</span></span>
+                <span><span className="text-neutral-500">CLASSICAL</span> <span style={{ color: (hover.c.classical ?? 0) >= 0 ? "#3366FF" : "#FF3333" }}>{hover.c.classical?.toFixed(3)}</span></span>
+                <span><span className="text-neutral-500">QUANTUM</span> <span style={{ color: (hover.c.quantum ?? 0) >= 0 ? "#3366FF" : "#FF3333" }}>{hover.c.quantum?.toFixed(3)}</span></span>
+                <span><span className="text-neutral-500">FUSED</span> <span className="text-white font-bold">{hover.c.fused?.toFixed(3)}</span></span>
+                <span className="text-neutral-600 text-[8px]">+= momentum · −= mean-revert</span>
+              </>
+            ) : (
+              <>
+                <span><span className="text-neutral-500">PAIR</span> <span className="text-white">{hover.row}</span> ↔ <span className="text-white">{hover.col}</span></span>
+                <span><span className="text-neutral-500">CLASSICAL</span> <span style={{ color: colorFor(hover.c.classical ?? 0).includes("255,51") ? "#FF3333" : "#3366FF" }}>{hover.c.classical?.toFixed(3)}</span></span>
+                <span><span className="text-neutral-500">QUANTUM</span> <span style={{ color: colorFor(hover.c.quantum ?? 0).includes("255,51") ? "#FF3333" : "#3366FF" }}>{hover.c.quantum?.toFixed(3)}</span></span>
+                <span><span className="text-neutral-500">FUSED</span> <span className="text-white font-bold">{hover.c.fused?.toFixed(3)}</span></span>
+              </>
+            )}
           </div>
         )}
       </div>

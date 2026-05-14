@@ -144,6 +144,9 @@ frontend:
       - working: true
         agent: "testing"
         comment: "Comprehensive testing completed. BTC diagonal cell shows numeric value 0.98 (NOT dash). All 16 diagonal cells display numeric values (0.98). Header correctly shows 'Classical × Quantum Kernel' subtitle. All three modes (FUSED, CLASSICAL, QUANTUM) work correctly. Diagonal cells have proper blue color indicating positive correlation. Heatmap displays with proper color coding (blue for positive, red for negative correlations). Screenshots captured for all modes."
+      - working: true
+        agent: "testing"
+        comment: "CORRECTED TEST RESULTS: Diagonal cells correctly show DIFFERENT values for each asset (not all the same). FUSED mode: BTC=0.44, ETH=0.03, SOL=0.06, SPY=0.06, QQQ=-0.00. CLASSICAL mode: BTC=0.02, ETH=0.05, SOL=0.06, SPY=0.08, QQQ=-0.03. QUANTUM mode: BTC=-0.01, ETH=0.06, SOL=0.96, SPY=0.03, QQQ=0.03. Values vary as expected (positive, negative, near-zero). BTC tooltip shows 'AUTOCORR LAG-1' with CLASSICAL=0.007, QUANTUM=0.963, FUSED=0.437. All three modes work correctly. Diagonal cells represent autocorrelation lag-1 for each asset, which is why they differ. Feature working as designed."
 
 metadata:
   created_by: "main_agent"
