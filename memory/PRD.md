@@ -44,7 +44,7 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - News button in header to reopen news popup
 - **Confluence Score Meter**: 0-100 visual bar in Auto Scanner; color-coded; WEAK/MODERATE/STRONG/VERY STRONG/EXTREME labels
 - **1-Day Target**: ATR-based 1D Target in all 11 strategy signals (cyan badge)
-- **Hybrid Mode (QSC Engine)**: "HYBRID" button in Gann Trader header → full QSC.Engine dashboard (Quantum-Cascade Signal Core paper-trading simulator) with Coinbase/CoinGecko live crypto, multi-asset watchlist (stocks/commodities/macro), QSC AI signals (Claude Sonnet), L2 order book, correlation heatmap, regulatory watchdog, portfolio, positions, trades log. EXIT button returns to Gann Trader.
+- **Indian Markets in QSC Engine**: 10 NSE stocks (RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK, WIPRO, SBIN, BAJFINANCE, NIFTY50, SENSEX) via yfinance, live INR prices, separate "Indian Markets" watchlist section, refresh every 60s
 
 ## Known Issues
 - CoinGecko Rate Limits (429) - Free tier limitation, cache active

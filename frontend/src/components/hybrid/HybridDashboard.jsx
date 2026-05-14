@@ -197,8 +197,10 @@ export default function HybridDashboard({ onBack }) {
 
 /* ---- Watchlist sub-component ---- */
 function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
-  const groups = { crypto: [], stock: [], commodity: [], macro: [] };
-  for (const a of assets) groups[a.asset_class]?.push(a);
+  const groups = { crypto: [], stock: [], commodity: [], macro: [], indian: [] };
+  for (const a of assets) {
+    if (groups[a.asset_class]) groups[a.asset_class].push(a);
+  }
 
   const Section = ({ label, icon, items }) => (
     <div className="border-t border-white/5 first:border-t-0">
@@ -222,7 +224,7 @@ function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
             </div>
             <div className="text-right">
               <span className="text-white block" data-testid={`hybrid-price-${a.symbol}`}>
-                {price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {a.currency === 'INR' ? '₹' : ''}{price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </span>
               <span style={{ color: up ? "#3366FF" : "#FF3333" }} className="text-[9px]">
                 {up ? "+" : ""}{a.change_24h?.toFixed(2)}%
@@ -240,10 +242,11 @@ function HybridWatchlist({ assets, livePrices, selected, onSelect }) {
         <Database size={13} className="text-neutral-400" />
         <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-400">Watchlist</span>
       </div>
-      <Section label="Crypto"      icon={<ChartLineUp size={11} />}  items={groups.crypto} />
-      <Section label="Equities"    icon={<ChartBar size={11} />}     items={groups.stock} />
-      <Section label="Commodities" icon={<Lightning size={11} />}    items={groups.commodity} />
-      <Section label="Macro"       icon={<Shield size={11} />}       items={groups.macro} />
+      <Section label="Crypto"         icon={<ChartLineUp size={11} />}  items={groups.crypto} />
+      <Section label="Equities"       icon={<ChartBar size={11} />}     items={groups.stock} />
+      <Section label="Indian Markets" icon={<span className="text-[9px]">₹</span>} items={groups.indian} />
+      <Section label="Commodities"    icon={<Lightning size={11} />}    items={groups.commodity} />
+      <Section label="Macro"          icon={<Shield size={11} />}       items={groups.macro} />
     </div>
   );
 }

@@ -6275,6 +6275,16 @@ _H_NON_CRYPTO_ASSETS = {
                   {"symbol": "US10Y",    "name": "US 10Y Yield",     "price": 4.25},
                   {"symbol": "VIX",      "name": "Volatility Index", "price": 14.80},
                   {"symbol": "FEDFUNDS", "name": "Fed Funds Rate",   "price": 4.75}],
+    "indian":    [{"symbol": "RELIANCE",   "name": "Reliance Industries",    "yf": "RELIANCE.NS",   "price": 1350.0},
+                  {"symbol": "TCS",        "name": "Tata Consultancy",       "yf": "TCS.NS",        "price": 3800.0},
+                  {"symbol": "INFY",       "name": "Infosys",                "yf": "INFY.NS",       "price": 1600.0},
+                  {"symbol": "HDFCBANK",   "name": "HDFC Bank",              "yf": "HDFCBANK.NS",   "price": 1700.0},
+                  {"symbol": "ICICIBANK",  "name": "ICICI Bank",             "yf": "ICICIBANK.NS",  "price": 1350.0},
+                  {"symbol": "WIPRO",      "name": "Wipro",                  "yf": "WIPRO.NS",      "price": 320.0},
+                  {"symbol": "SBIN",       "name": "State Bank India",       "yf": "SBIN.NS",       "price": 785.0},
+                  {"symbol": "BAJFINANCE", "name": "Bajaj Finance",          "yf": "BAJFINANCE.NS", "price": 6800.0},
+                  {"symbol": "NIFTY50",    "name": "Nifty 50 Index",         "yf": "^NSEI",         "price": 22500.0},
+                  {"symbol": "SENSEX",     "name": "BSE Sensex",             "yf": "^BSESN",        "price": 74000.0}],
 }
 
 def _h_init():
@@ -6285,6 +6295,8 @@ def _h_init():
                 "price": a["price"], "base_price": a["price"],
                 "change_24h": _random.uniform(-2.5, 2.5),
                 "volume": _random.uniform(1e6, 5e8), "history": [a["price"]],
+                "yf_ticker": a.get("yf"),   # yfinance symbol (only for indian class)
+                "currency": "INR" if cls == "indian" else "USD",
             }
     # Seed crypto history
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -6297,7 +6309,8 @@ def _h_init():
 
 _h_init()
 
-_H_ALL_SYMS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SPY", "QQQ", "NVDA", "XAU", "WTI", "DXY", "US10Y", "VIX"]
+_H_ALL_SYMS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SPY", "QQQ", "NVDA", "XAU", "WTI", "DXY", "US10Y", "VIX",
+               "RELIANCE", "TCS", "INFY", "HDFCBANK", "NIFTY50"]
 
 # ---- Background tasks ----
 async def _hybrid_coinbase_bridge():
@@ -6359,6 +6372,8 @@ async def _hybrid_coingecko_fallback():
 async def _hybrid_non_crypto_simulator():
     while True:
         for sym, st in _H_NON_CRYPTO.items():
+            if st["asset_class"] == "indian":
+                continue  # Indian stocks updated by yfinance poller, not simulated
             sigma = 0.0008 if st["asset_class"] in ("stock", "commodity") else 0.0003
             new_p = st["price"] * (1 + _random.gauss(0, sigma))
             new_p = new_p + 0.001 * (st["base_price"] - new_p)
@@ -6367,6 +6382,50 @@ async def _hybrid_non_crypto_simulator():
             h = st["history"]; h.append(new_p)
             if len(h) > 300: del h[:len(h)-300]
         await asyncio.sleep(1)
+
+
+async def _hybrid_indian_yfinance_poller():
+    """Fetch live Indian NSE prices via yfinance every 60 seconds."""
+    indian_assets = {sym: st for sym, st in _H_NON_CRYPTO.items() if st.get("yf_ticker")}
+    tickers_yf = [st["yf_ticker"] for st in indian_assets.values()]
+
+    while True:
+        try:
+            loop = asyncio.get_event_loop()
+            def _fetch():
+                import yfinance as _yf
+                batch = _yf.Tickers(" ".join(tickers_yf))
+                result = {}
+                for sym, st in indian_assets.items():
+                    ytk = st["yf_ticker"]
+                    try:
+                        info = batch.tickers[ytk].fast_info
+                        last = getattr(info, "last_price", None) or getattr(info, "previous_close", None)
+                        prev = getattr(info, "previous_close", None) or last
+                        if last and last > 0:
+                            result[sym] = {"price": float(last), "prev": float(prev) if prev else float(last)}
+                    except Exception:
+                        pass
+                return result
+
+            prices = await loop.run_in_executor(None, _fetch)
+            for sym, data in prices.items():
+                st = _H_NON_CRYPTO.get(sym)
+                if not st:
+                    continue
+                new_p = data["price"]
+                prev_p = data["prev"]
+                st["price"] = round(new_p, 2)
+                st["base_price"] = round(prev_p, 2)
+                st["change_24h"] = round(((new_p - prev_p) / prev_p * 100) if prev_p else 0, 3)
+                h = st["history"]
+                h.append(new_p)
+                if len(h) > 300:
+                    del h[:len(h) - 300]
+            logging.info(f"Indian yfinance update: {len(prices)} stocks refreshed")
+        except Exception as e:
+            logging.warning(f"Indian yfinance poller error: {e}")
+        await asyncio.sleep(60)
 
 # ---- Helper: price series ----
 def _h_series(symbol: str) -> list:
@@ -6433,7 +6492,8 @@ async def h_get_assets():
                     "price": last, "change_24h": round(ch,3), "volume": _random.uniform(1e8,5e9)})
     for sym, st in _H_NON_CRYPTO.items():
         out.append({"symbol": sym, "name": st["name"], "asset_class": st["asset_class"],
-                    "price": st["price"], "change_24h": st["change_24h"], "volume": st["volume"]})
+                    "price": st["price"], "change_24h": st["change_24h"], "volume": st["volume"],
+                    "currency": st.get("currency", "USD")})
     return out
 
 @hybrid_router.get("/prices/{symbol}")
@@ -6702,4 +6762,5 @@ async def startup_binance_ws():
     asyncio.create_task(_hybrid_coinbase_bridge())
     asyncio.create_task(_hybrid_coingecko_fallback())
     asyncio.create_task(_hybrid_non_crypto_simulator())
-    logging.info("Kraken + QSC Hybrid WebSocket background tasks started")
+    asyncio.create_task(_hybrid_indian_yfinance_poller())
+    logging.info("Kraken + QSC Hybrid + Indian yfinance background tasks started")
