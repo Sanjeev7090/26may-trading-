@@ -37,6 +37,14 @@ export default function CorrelationHeatmap({ data }) {
     return c.fused ?? 0;
   };
 
+  const getDiagValue = (sym) => {
+    const c = matrix[sym]?.[sym];
+    if (!c) return null;
+    if (mode === "classical") return c.classical ?? 1.0;
+    if (mode === "quantum")   return c.quantum   ?? null;
+    return c.fused ?? null;
+  };
+
   if (!symbols.length) {
     return (
       <div className="qsc-card p-5" data-testid="correlation-heatmap">
@@ -58,8 +66,8 @@ export default function CorrelationHeatmap({ data }) {
           <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-400">
             Correlation Matrix
           </span>
-          <span className="ml-2 text-[9px] font-mono text-neutral-600">
-            {symbols.length} assets · {mode === "fused" ? "QSC Fused" : mode === "classical" ? "Classical Pearson" : "Quantum Kernel"}
+          <span className="ml-2 text-[9px] font-bold uppercase tracking-widest text-neutral-500">
+            {mode === "fused" ? "Classical × Quantum Kernel" : mode === "classical" ? "Classical Pearson" : "Quantum Kernel"}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -116,12 +124,15 @@ export default function CorrelationHeatmap({ data }) {
                 const c = matrix[row]?.[col];
                 const v = getValue(c);
                 const isDiag = row === col;
+                const diagVal = isDiag ? getDiagValue(row) : null;
                 return (
                   <div
                     key={`${row}-${col}`}
                     className="heat-cell relative"
                     style={{
-                      background: isDiag ? "rgba(255,255,255,0.06)" : colorFor(v),
+                      background: isDiag
+                        ? (diagVal !== null ? colorFor(diagVal) : "rgba(255,255,255,0.06)")
+                        : colorFor(v),
                       aspectRatio: "1",
                       minHeight: 28,
                     }}
@@ -129,8 +140,10 @@ export default function CorrelationHeatmap({ data }) {
                     onMouseLeave={() => setHover(null)}
                     data-testid={`heat-${row}-${col}`}
                   >
-                    <span className="text-[7.5px] font-mono" style={{ color: Math.abs(v) > 0.5 ? "#fff" : "#aaa" }}>
-                      {isDiag ? "—" : v.toFixed(2)}
+                    <span className="text-[7.5px] font-mono" style={{ color: isDiag ? "#fff" : (Math.abs(v) > 0.5 ? "#fff" : "#aaa") }}>
+                      {isDiag
+                        ? (diagVal !== null ? diagVal.toFixed(2) : "—")
+                        : v.toFixed(2)}
                     </span>
                   </div>
                 );
