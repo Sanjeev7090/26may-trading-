@@ -26,6 +26,17 @@ export default function QSCChart({ symbol, livePrice, onChangeSymbol, options, a
     setCurrency(asset?.currency || "USD");
   }, [symbol, allAssets]);
 
+  // Clear chart immediately when symbol changes
+  useEffect(() => {
+    setBars([]);
+    if (candleRef.current) {
+      try { candleRef.current.setData([]); } catch {}
+    }
+    if (chartRef.current) {
+      try { chartRef.current.timeScale().fitContent(); } catch {}
+    }
+  }, [symbol]);
+
   // ---- Fetch chart data ----
   const fetchBars = useCallback(async () => {
     if (!symbol) return;

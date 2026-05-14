@@ -26,6 +26,17 @@ const CRYPTO_OPTIONS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"];
 
 export default function HybridDashboard({ onBack }) {
   const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
+  const [istTime, setIstTime] = useState("");
+  
+  // IST clock
+  useEffect(() => {
+    const tick = () => setIstTime(new Date().toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
   const [livePrices,  setLivePrices]  = useState({});
   const [assets,      setAssets]      = useState([]);
   const [book,        setBook]        = useState(null);
@@ -132,7 +143,7 @@ export default function HybridDashboard({ onBack }) {
             <Lightning size={12} className="text-[#3366FF]" /> Live
           </span>
           <span className="hidden md:inline">SIM-MODE</span>
-          <span className="text-white">{new Date().toUTCString().slice(17, 25)} UTC</span>
+          <span className="text-white">{istTime} IST</span>
         </div>
       </header>
 
