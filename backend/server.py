@@ -6249,6 +6249,377 @@ async def shutdown_db_client():
     client.close()
 
 
+# =====================================================================
+# HYBRID MODE — QSC ENGINE ROUTES (prefix: /api/hybrid/)
+# =====================================================================
+import math as _math
+import random as _random
+
+# ---- In-memory state for Hybrid mode ----
+_H_LIVE: dict = {"BTCUSDT": 67000.0, "ETHUSDT": 3500.0, "SOLUSDT": 165.0, "ADAUSDT": 0.95}
+_H_HISTORY: dict = {k: [] for k in _H_LIVE}
+_H_COINBASE_MAP = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD", "ADAUSDT": "ADA-USD"}
+_H_COINGECKO_MAP = {"BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana", "ADAUSDT": "cardano"}
+_H_NON_CRYPTO: dict = {}
+
+_H_NON_CRYPTO_ASSETS = {
+    "stock":     [{"symbol": "SPY",  "name": "S&P 500 ETF",      "price": 558.20},
+                  {"symbol": "QQQ",  "name": "Nasdaq 100 ETF",    "price": 478.15},
+                  {"symbol": "NVDA", "name": "NVIDIA",            "price": 132.50},
+                  {"symbol": "TSLA", "name": "Tesla",             "price": 248.30}],
+    "commodity": [{"symbol": "XAU",  "name": "Gold (oz)",        "price": 2685.40},
+                  {"symbol": "XAG",  "name": "Silver (oz)",      "price": 31.85},
+                  {"symbol": "WTI",  "name": "Crude Oil WTI",    "price": 71.20},
+                  {"symbol": "NG",   "name": "Natural Gas",      "price": 2.85}],
+    "macro":     [{"symbol": "DXY",      "name": "Dollar Index",     "price": 104.50},
+                  {"symbol": "US10Y",    "name": "US 10Y Yield",     "price": 4.25},
+                  {"symbol": "VIX",      "name": "Volatility Index", "price": 14.80},
+                  {"symbol": "FEDFUNDS", "name": "Fed Funds Rate",   "price": 4.75}],
+}
+
+def _h_init():
+    for cls, items in _H_NON_CRYPTO_ASSETS.items():
+        for a in items:
+            _H_NON_CRYPTO[a["symbol"]] = {
+                "symbol": a["symbol"], "name": a["name"], "asset_class": cls,
+                "price": a["price"], "base_price": a["price"],
+                "change_24h": _random.uniform(-2.5, 2.5),
+                "volume": _random.uniform(1e6, 5e8), "history": [a["price"]],
+            }
+    # Seed crypto history
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    for sym, p in _H_LIVE.items():
+        h, cur = [], p
+        for i in range(60, 0, -1):
+            cur *= (1 + _random.gauss(0, 0.0008))
+            h.append({"t": now_ms - i * 1000, "p": round(cur, 2)})
+        _H_HISTORY[sym] = h
+
+_h_init()
+
+_H_ALL_SYMS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SPY", "QQQ", "NVDA", "XAU", "WTI", "DXY", "US10Y", "VIX"]
+
+# ---- Background tasks ----
+async def _hybrid_coinbase_bridge():
+    sub = {"type": "subscribe", "product_ids": list(_H_COINBASE_MAP.values()), "channels": ["ticker"]}
+    backoff, initialized = 1, {}
+    while True:
+        try:
+            async with websockets.connect("wss://ws-feed.exchange.coinbase.com", ping_interval=20) as conn:
+                await conn.send(json.dumps(sub))
+                backoff = 1
+                async for raw in conn:
+                    try:
+                        d = json.loads(raw)
+                        if d.get("type") != "ticker": continue
+                        prod = d.get("product_id"); price = float(d.get("price", 0))
+                        if price <= 0: continue
+                        for sym, cb in _H_COINBASE_MAP.items():
+                            if cb == prod:
+                                _H_LIVE[sym] = price
+                                if not initialized.get(sym):
+                                    initialized[sym] = True
+                                    nm = int(datetime.now(timezone.utc).timestamp() * 1000)
+                                    cur2 = price
+                                    seeded = []
+                                    for ii in range(60, 0, -1):
+                                        cur2 *= (1 + _random.gauss(0, 0.0006))
+                                        seeded.append({"t": nm - ii * 1000, "p": round(cur2, 4)})
+                                    _H_HISTORY[sym] = seeded
+                                h2 = _H_HISTORY[sym]
+                                h2.append({"t": int(datetime.now(timezone.utc).timestamp() * 1000), "p": price})
+                                if len(h2) > 500: del h2[:len(h2)-500]
+                                break
+                    except Exception: pass
+        except Exception as e:
+            logging.warning(f"Hybrid Coinbase WS err: {e}. Retry in {backoff}s")
+            await asyncio.sleep(backoff); backoff = min(backoff * 2, 30)
+
+async def _hybrid_coingecko_fallback():
+    ids = ",".join(_H_COINGECKO_MAP.values())
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd"
+    async with httpx.AsyncClient(timeout=10.0) as cli:
+        while True:
+            try:
+                r = await cli.get(url)
+                if r.status_code == 200:
+                    data = r.json()
+                    nm = int(datetime.now(timezone.utc).timestamp() * 1000)
+                    for sym, cg in _H_COINGECKO_MAP.items():
+                        v = data.get(cg, {}).get("usd")
+                        if v and v > 0:
+                            _H_LIVE[sym] = float(v)
+                            h3 = _H_HISTORY[sym]
+                            if not h3 or nm - h3[-1]["t"] > 4000:
+                                h3.append({"t": nm, "p": float(v)})
+                                if len(h3) > 500: del h3[:len(h3)-500]
+            except Exception: pass
+            await asyncio.sleep(8)
+
+async def _hybrid_non_crypto_simulator():
+    while True:
+        for sym, st in _H_NON_CRYPTO.items():
+            sigma = 0.0008 if st["asset_class"] in ("stock", "commodity") else 0.0003
+            new_p = st["price"] * (1 + _random.gauss(0, sigma))
+            new_p = new_p + 0.001 * (st["base_price"] - new_p)
+            st["price"] = round(new_p, 4)
+            st["change_24h"] = round((new_p / st["base_price"] - 1) * 100, 3)
+            h = st["history"]; h.append(new_p)
+            if len(h) > 300: del h[:len(h)-300]
+        await asyncio.sleep(1)
+
+# ---- Helper: price series ----
+def _h_series(symbol: str) -> list:
+    if symbol in _H_HISTORY: return [p["p"] for p in _H_HISTORY[symbol]]
+    if symbol in _H_NON_CRYPTO: return _H_NON_CRYPTO[symbol]["history"]
+    return []
+
+def _h_pearson(x, y):
+    n = min(len(x), len(y))
+    if n < 4: return 0.0
+    x, y = x[-n:], y[-n:]
+    mx, my = sum(x)/n, sum(y)/n
+    num = sum((a-mx)*(b-my) for a, b in zip(x, y))
+    dx = _math.sqrt(sum((a-mx)**2 for a in x))
+    dy = _math.sqrt(sum((b-my)**2 for b in y))
+    if dx == 0 or dy == 0: return 0.0
+    return max(-1.0, min(1.0, num / (dx*dy)))
+
+def _h_quantum_kernel(x, y):
+    n = min(len(x), len(y))
+    if n < 4: return 0.0
+    rx = [(x[i]-x[i-1])/x[i-1] for i in range(1,n) if x[i-1]!=0]
+    ry = [(y[i]-y[i-1])/y[i-1] for i in range(1,n) if y[i-1]!=0]
+    m = min(len(rx), len(ry))
+    if m < 3: return 0.0
+    rx, ry = rx[-m:], ry[-m:]
+    dot = sum(a*b for a,b in zip(rx,ry))
+    nx = _math.sqrt(sum(a*a for a in rx)) or 1e-9
+    ny = _math.sqrt(sum(b*b for b in ry)) or 1e-9
+    cos = dot/(nx*ny)
+    return max(-1.0, min(1.0, _math.tanh(cos * _math.pi/2) * 1.05))
+
+def _h_fused(c, q): return 0.55*c + 0.45*q
+
+def _h_momentum(symbol):
+    s = _h_series(symbol)
+    if len(s) < 20: return 0.0
+    return (sum(s[-5:])/5 - sum(s[-20:])/20) / (sum(s[-20:])/20 or 1)
+
+def _h_compute_corr():
+    cells = []
+    for i, a in enumerate(_H_ALL_SYMS):
+        for b in _H_ALL_SYMS[i:]:
+            sa, sb = _h_series(a), _h_series(b)
+            c = _h_pearson(sa, sb)
+            q = _h_quantum_kernel(sa, sb)
+            f = _h_fused(c, q)
+            cells.append({"a": a, "b": b, "classical": round(c,3), "quantum": round(q,3), "fused": round(f,3)})
+    return cells
+
+# ---- Hybrid Router ----
+hybrid_router = APIRouter(prefix="/api/hybrid")
+
+@hybrid_router.get("/assets")
+async def h_get_assets():
+    out = []
+    meta = {"BTCUSDT": "Bitcoin", "ETHUSDT": "Ethereum", "SOLUSDT": "Solana", "ADAUSDT": "Cardano"}
+    for sym, name in meta.items():
+        h = _H_HISTORY.get(sym, [])
+        first = h[0]["p"] if h else _H_LIVE[sym]
+        last = _H_LIVE[sym]
+        ch = ((last-first)/first*100) if first else 0
+        out.append({"symbol": sym, "name": name, "asset_class": "crypto",
+                    "price": last, "change_24h": round(ch,3), "volume": _random.uniform(1e8,5e9)})
+    for sym, st in _H_NON_CRYPTO.items():
+        out.append({"symbol": sym, "name": st["name"], "asset_class": st["asset_class"],
+                    "price": st["price"], "change_24h": st["change_24h"], "volume": st["volume"]})
+    return out
+
+@hybrid_router.get("/prices/{symbol}")
+async def h_price_series(symbol: str, limit: int = 120):
+    if symbol in _H_HISTORY: return _H_HISTORY[symbol][-limit:]
+    if symbol in _H_NON_CRYPTO:
+        h = _H_NON_CRYPTO[symbol]["history"][-limit:]
+        return [{"t": i, "p": p} for i, p in enumerate(h)]
+    raise HTTPException(404, f"Unknown symbol {symbol}")
+
+@hybrid_router.get("/orderbook/{symbol}")
+async def h_orderbook(symbol: str):
+    if symbol in _H_LIVE: mid = _H_LIVE[symbol]
+    elif symbol in _H_NON_CRYPTO: mid = _H_NON_CRYPTO[symbol]["price"]
+    else: raise HTTPException(404, "Unknown symbol")
+    bids, asks = [], []
+    half = mid * 4 / 20000
+    for i in range(10):
+        bids.append({"price": round(mid-half-i*(mid*0.0002),2), "qty": round(_random.uniform(0.2,12.0),4)})
+        asks.append({"price": round(mid+half+i*(mid*0.0002),2), "qty": round(_random.uniform(0.2,12.0),4)})
+    return {"symbol": symbol, "mid": mid, "bids": bids, "asks": asks}
+
+@hybrid_router.get("/correlation")
+async def h_correlation():
+    cells = _h_compute_corr()
+    return {"symbols": _H_ALL_SYMS, "cells": cells}
+
+@hybrid_router.post("/qsc/signal")
+async def h_generate_signal(body: dict):
+    target = body.get("symbol", "BTCUSDT")
+    moms = {s: _h_momentum(s) for s in _H_ALL_SYMS}
+    mean_m = sum(moms.values()) / max(len(moms), 1)
+    anchor = max(moms, key=lambda k: abs(moms[k]-mean_m))
+    corr_list = []
+    for s in _H_ALL_SYMS:
+        if s == anchor: continue
+        f = _h_fused(_h_pearson(_h_series(anchor),_h_series(s)), _h_quantum_kernel(_h_series(anchor),_h_series(s)))
+        corr_list.append((s, f))
+    corr_list.sort(key=lambda x: abs(x[1]), reverse=True)
+    bridge = corr_list[0][0] if corr_list else "ETHUSDT"
+    amplifier = corr_list[1][0] if len(corr_list) > 1 else "SOLUSDT"
+    risk_t = _h_fused(_h_pearson(_h_series(anchor),_h_series(target)), _h_quantum_kernel(_h_series(anchor),_h_series(target)))
+    composite = 0.6*moms.get(target,0) + 0.4*(risk_t*moms.get(anchor,0))
+    if composite > 0.0005: direction = "LONG"
+    elif composite < -0.0005: direction = "SHORT"
+    else: direction = "NEUTRAL"
+    confidence = min(1.0, abs(composite)*800 + abs(risk_t)*0.3 + 0.15)
+    payload = {"symbol": target, "direction": direction, "anchor_asset": anchor,
+               "bridge_asset": bridge, "amplifier_asset": amplifier,
+               "momentum_score": round(moms.get(target,0),5),
+               "risk_transfer_score": round(risk_t,4), "confidence": round(confidence,3)}
+    # LLM reasoning
+    reasoning = f"Statistical signal: {direction} on {target} driven by anchor={anchor}."
+    llm_key = os.environ.get("EMERGENT_LLM_KEY", "")
+    if llm_key:
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage as _UM
+            chat = LlmChat(api_key=llm_key, session_id=f"qsc-{uuid.uuid4().hex[:8]}",
+                           system_message="You are the QSC Engine, an analytical trading reasoning module. Given numerical signal data, write a precise 3-sentence rationale explaining the cascade momentum hypothesis. Use technical, neutral, quant language. NEVER recommend illegal activity. Output plain text only."
+                           ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            reasoning = await chat.send_message(_UM(text=json.dumps(payload, default=str)))
+        except Exception as llm_e:
+            logging.warning(f"QSC LLM error: {llm_e}")
+    sig = {"id": str(uuid.uuid4()), "symbol": target, "direction": direction,
+           "confidence": round(confidence,3), "momentum_score": round(moms.get(target,0),5),
+           "risk_transfer_score": round(risk_t,4), "anchor_asset": anchor,
+           "bridge_asset": bridge, "amplifier_asset": amplifier,
+           "reasoning": reasoning, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.qsc_signals.insert_one(dict(sig))
+    sig.pop("_id", None)
+    return sig
+
+@hybrid_router.get("/qsc/signals")
+async def h_list_signals(limit: int = 10):
+    cur = db.qsc_signals.find({}, {"_id": 0}).sort("created_at", -1).limit(limit)
+    return [d async for d in cur]
+
+@hybrid_router.get("/regulatory/sentiment")
+async def h_regulatory():
+    score = round(_random.uniform(-0.6, 0.7), 3)
+    label = "SUPPORTIVE" if score>0.3 else "NEUTRAL" if score>-0.1 else "CAUTIOUS" if score>-0.4 else "HOSTILE"
+    multiplier = max(0.3, min(1.3, 1.0+score*0.4))
+    return {"score": score, "label": label, "aggressiveness_multiplier": round(multiplier,3),
+            "headlines": [
+                {"src": "FedSpeech", "headline": "Chair signals data-dependent stance", "weight": 0.6},
+                {"src": "SEC", "headline": "New disclosure rules for digital asset custodians", "weight": -0.3},
+                {"src": "EU MiCA", "headline": "Stablecoin transition window extended", "weight": 0.4},
+                {"src": "G20 Brief", "headline": "Coordinated framework on AI-driven trading", "weight": -0.2},
+            ], "updated_at": datetime.now(timezone.utc).isoformat()}
+
+@hybrid_router.post("/trades/execute")
+async def h_execute_trade(req: dict):
+    symbol = req.get("symbol", "BTCUSDT")
+    direction = req.get("direction", "LONG")
+    volume = float(req.get("volume", 0.1))
+    use_stag = req.get("use_staggered", True)
+    if symbol in _H_LIVE: mid = _H_LIVE[symbol]
+    elif symbol in _H_NON_CRYPTO: mid = _H_NON_CRYPTO[symbol]["price"]
+    else: raise HTTPException(404, "Unknown symbol")
+    if direction not in ("LONG","SHORT"): raise HTTPException(400, "direction must be LONG or SHORT")
+    if volume <= 0: raise HTTPException(400, "volume must be positive")
+    venues = [("VENUE-A",1.0,380),("VENUE-B",0.65,720),("VENUE-C",0.45,240)] if use_stag else [("VENUE-A",1.0,380)]
+    side = "BUY" if direction == "LONG" else "SELL"
+    legs, total_qty, total_cost = [], 0.0, 0.0
+    for v, frac, lat in venues:
+        slip = _random.uniform(-0.0008, 0.0012)
+        px = mid*(1+slip if side=="BUY" else 1-slip)
+        q = round(volume*frac, 6)
+        legs.append({"venue": v, "side": side, "price": round(px,4), "quantity": q,
+                     "latency_ns": lat, "executed_at": datetime.now(timezone.utc).isoformat()})
+        total_qty += q; total_cost += q*px
+    avg = total_cost/total_qty if total_qty else mid
+    trade = {"id": str(uuid.uuid4()), "symbol": symbol, "direction": direction,
+             "total_volume": round(total_qty,6), "avg_price": round(avg,4),
+             "legs": legs, "pnl": 0.0, "status": "OPEN",
+             "opened_at": datetime.now(timezone.utc).isoformat(), "closed_at": None}
+    await db.hybrid_trades.insert_one(dict(trade))
+    trade.pop("_id", None)
+    return trade
+
+@hybrid_router.get("/trades")
+async def h_list_trades(limit: int = 30):
+    cur = db.hybrid_trades.find({}, {"_id": 0}).sort("opened_at", -1).limit(limit)
+    return [d async for d in cur]
+
+@hybrid_router.post("/trades/{trade_id}/close")
+async def h_close_trade(trade_id: str):
+    doc = await db.hybrid_trades.find_one({"id": trade_id}, {"_id": 0})
+    if not doc: raise HTTPException(404, "Trade not found")
+    if doc["status"] != "OPEN": raise HTTPException(400, "Already closed")
+    sym = doc["symbol"]
+    cur_price = _H_LIVE.get(sym) or _H_NON_CRYPTO.get(sym, {}).get("price")
+    if cur_price is None: raise HTTPException(400, "No price")
+    mult = 1 if doc["direction"] == "LONG" else -1
+    pnl = (cur_price - doc["avg_price"]) * doc["total_volume"] * mult
+    await db.hybrid_trades.update_one({"id": trade_id},
+        {"$set": {"status": "CLOSED", "pnl": round(pnl,4), "closed_at": datetime.now(timezone.utc).isoformat()}})
+    return {"id": trade_id, "status": "CLOSED", "pnl": round(pnl,4)}
+
+@hybrid_router.get("/positions")
+async def h_positions():
+    cur = db.hybrid_trades.find({"status": "OPEN"}, {"_id": 0})
+    out = []
+    async for t in cur:
+        sym = t["symbol"]
+        cp = _H_LIVE.get(sym) or _H_NON_CRYPTO.get(sym, {}).get("price") or t["avg_price"]
+        mult = 1 if t["direction"] == "LONG" else -1
+        pnl = (cp - t["avg_price"]) * t["total_volume"] * mult
+        out.append({"symbol": sym, "direction": t["direction"], "quantity": t["total_volume"],
+                    "entry_price": t["avg_price"], "current_price": round(cp,4),
+                    "pnl": round(pnl,4), "pnl_pct": round(((cp/t["avg_price"])-1)*100*mult, 3)})
+    return out
+
+@hybrid_router.get("/portfolio/summary")
+async def h_portfolio():
+    trades = [t async for t in db.hybrid_trades.find({}, {"_id": 0})]
+    realized = sum(t.get("pnl",0) or 0 for t in trades if t["status"]=="CLOSED")
+    open_t = [t for t in trades if t["status"]=="OPEN"]
+    unrealized = 0.0
+    for t in open_t:
+        sym = t["symbol"]
+        cp = _H_LIVE.get(sym) or _H_NON_CRYPTO.get(sym,{}).get("price") or t["avg_price"]
+        mult = 1 if t["direction"]=="LONG" else -1
+        unrealized += (cp - t["avg_price"]) * t["total_volume"] * mult
+    return {"realized_pnl": round(realized,4), "unrealized_pnl": round(unrealized,4),
+            "total_pnl": round(realized+unrealized,4), "open_positions": len(open_t), "total_trades": len(trades)}
+
+@app.websocket("/api/ws/qsc-prices")
+async def ws_qsc_prices(websocket: WebSocket):
+    """Push QSC Hybrid crypto prices every second."""
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.send_text(json.dumps({
+                "type": "tick", "prices": _H_LIVE,
+                "ts": int(datetime.now(timezone.utc).timestamp() * 1000),
+            }))
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        return
+    except Exception as e:
+        logging.debug(f"ws_qsc_prices err: {e}")
+
+app.include_router(hybrid_router)
+
+
 # ======================= BINANCE WEBSOCKET BACKGROUND TASK =======================
 
 async def _binance_ws_task():
@@ -6327,4 +6698,8 @@ async def _binance_ws_task():
 @app.on_event("startup")
 async def startup_binance_ws():
     asyncio.create_task(_binance_ws_task())
-    logging.info("Kraken WebSocket background task started")
+    # Also start QSC/Hybrid background feeds
+    asyncio.create_task(_hybrid_coinbase_bridge())
+    asyncio.create_task(_hybrid_coingecko_fallback())
+    asyncio.create_task(_hybrid_non_crypto_simulator())
+    logging.info("Kraken + QSC Hybrid WebSocket background tasks started")

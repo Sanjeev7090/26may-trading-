@@ -27,13 +27,15 @@ import AMDSAnalysis from './AMDSAnalysis';
 import MiroFishAnalysis from './MiroFishAnalysis';
 import PACSOAnalysis from './PACSOAnalysis';
 import StockNewsPopup from './StockNewsPopup';
+import HybridDashboard from './hybrid/HybridDashboard';
 import { Toaster, toast } from 'sonner';
-import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper } from '@phosphor-icons/react';
+import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 const TradingDashboard = () => {
+  const [hybridMode, setHybridMode] = useState(false);
   const [selectedStock, setSelectedStock] = useState(null);
   const [stockData, setStockData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -215,6 +217,14 @@ const TradingDashboard = () => {
     <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col" data-testid="trading-dashboard">
       <Toaster theme="dark" position="top-right" richColors />
 
+      {/* HYBRID MODE OVERLAY */}
+      {hybridMode && (
+        <HybridDashboard onBack={() => setHybridMode(false)} />
+      )}
+
+      {/* Normal Gann Trader UI (hidden when hybrid mode is on) */}
+      {!hybridMode && (<>
+
       {/* Header */}
       <header className="h-12 md:h-14 border-b border-white/10 flex items-center justify-between px-3 lg:px-6 bg-[#0A0A0A]/90 backdrop-blur-md z-50 shrink-0" data-testid="dashboard-header">
         <div className="flex items-center gap-3">
@@ -248,6 +258,16 @@ const TradingDashboard = () => {
               )}
             </div>
           )}
+          {/* HYBRID MODE BUTTON */}
+          <button
+            onClick={() => setHybridMode(true)}
+            className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest border border-[#3366FF]/50 text-[#3366FF] hover:bg-[#3366FF]/15 hover:border-[#3366FF] px-2.5 py-1.5 rounded transition-all duration-200"
+            data-testid="hybrid-mode-btn"
+            title="Switch to QSC Hybrid Mode"
+          >
+            <ArrowsLeftRight size={12} weight="bold" />
+            <span className="hidden sm:inline">HYBRID</span>
+          </button>
         </div>
       </header>
 
@@ -387,6 +407,7 @@ const TradingDashboard = () => {
           onClose={() => setShowNews(false)}
         />
       )}
+    </>)}
     </div>
   );
 };

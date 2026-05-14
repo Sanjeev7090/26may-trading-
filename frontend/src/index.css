@@ -122,3 +122,107 @@ input, select, textarea {
     border-bottom-color: inherit;
   }
 }
+
+
+/* ============================================================
+   HYBRID MODE (QSC Engine) — Swiss/Brutalist styles
+   ============================================================ */
+@import url('https://api.fontshare.com/v2/css?f[]=clash-display@300,400,500,600,700&display=swap');
+
+.hybrid-mode {
+  --bg-base: #0A0A0A;
+  --bg-surface: #121212;
+  --bg-hover: #1A1A1A;
+  --profit: #3366FF;
+  --loss:   #FF3333;
+  --warn:   #FFCC00;
+  font-family: 'JetBrains Mono', monospace;
+  background: #0A0A0A;
+}
+.hybrid-mode .font-display { font-family: 'Clash Display', sans-serif; }
+
+/* Grid texture */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.028) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* QSC Cards */
+.qsc-card {
+  background: #121212;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.qsc-card:hover { background: #1A1A1A; }
+
+/* Heatmap cells */
+.heat-cell {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-family: 'JetBrains Mono', monospace;
+  border: 1px solid rgba(0,0,0,0.4);
+  color: #fff;
+  cursor: pointer;
+  transition: transform 80ms ease-out;
+}
+.heat-cell:hover { transform: scale(1.05); outline: 1px solid #fff; }
+
+/* Flat buttons */
+.btn-flat {
+  border: 1px solid rgba(255,255,255,0.4);
+  background: transparent;
+  color: #fff;
+  padding: 8px 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 120ms ease-out;
+}
+.btn-flat:hover:not(:disabled) { background: #fff; color: #000; }
+.btn-flat:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-long  { border-color: #3366FF; color: #3366FF; }
+.btn-long:hover  { background: #3366FF; color: #000; }
+.btn-short { border-color: #FF3333; color: #FF3333; }
+.btn-short:hover { background: #FF3333; color: #000; }
+
+/* Input line */
+.input-line {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.25);
+  border-radius: 0;
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 8px 4px;
+  outline: none;
+  width: 100%;
+}
+.input-line:focus { border-bottom-color: #fff; }
+
+/* Price flash */
+@keyframes flash-up   { 0% { background-color: rgba(51,102,255,0.35); } 100% { background-color: transparent; } }
+@keyframes flash-down { 0% { background-color: rgba(255,51,51,0.35);  } 100% { background-color: transparent; } }
+.flash-up   { animation: flash-up   600ms ease-out; }
+.flash-down { animation: flash-down 600ms ease-out; }
+
+/* Ticker marquee */
+@keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+.marquee-track {
+  display: inline-flex;
+  animation: marquee 60s linear infinite;
+  white-space: nowrap;
+}
+
+/* Pulse ring for live dot */
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(51,102,255,0.6); }
+  70%  { box-shadow: 0 0 0 8px rgba(51,102,255,0); }
+  100% { box-shadow: 0 0 0 0 rgba(51,102,255,0); }
+}
+.pulse-dot { animation: pulse-ring 1.6s infinite; }
