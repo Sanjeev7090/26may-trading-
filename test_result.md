@@ -171,16 +171,28 @@ frontend:
       - working: true
         agent: "testing"
         comment: "Comprehensive testing completed. ✓ Stock name display: Shows full stock/crypto names (Bitcoin, Reliance Industries, HDFC Bank) NOT symbols (BTCUSDT, RELIANCE, HDFCBANK). Symbol displayed in smaller text below name as required. ✓ No 'Anchor:' label visible in QSC Trading Card (correctly appears only in QSC Signal Panel). ✓ One-click functionality: Clicking stock in watchlist automatically triggers signal generation with 'Generating...' loading indicator. Signal generated within 6 seconds. ✓ Trading levels: Entry, Stop Loss, Target 1, Target 2 all displayed with percentages and Risk:Reward ratio. ✓ Cartoon character: HappyDancer (BUY signal) displayed correctly with 'BUY! 🚀' text, changes based on signal direction. ✓ No console errors. API requests working correctly. All requirements verified. Screenshots: 01_hybrid_dashboard_initial.png, 02_reliance_selected.png, 03_hdfcbank_selected.png"
+  
+  - task: "Regulatory Watchdog Panel - Main Gann Trader"
+    implemented: true
+    working: true
+    file: "frontend/src/components/RegulatoryWatchdogPanel.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Comprehensive testing completed for Regulatory Watchdog panel in main Gann Trader app. ✓ Panel visible in left sidebar below GannQSC Engine panel. ✓ Panel order correct: Search box → GANN·QSC ENGINE → REGULATORY WATCHDOG. ✓ Semicircle gauge/speedometer displaying correctly with needle. ✓ Label showing correctly (HOSTILE/NEUTRAL/SUPPORTIVE/CAUTIOUS based on score). ✓ Score display working (e.g., Score -0.325). ✓ Multiplier display working (e.g., Multiplier 0.983×). ✓ NSE/BSE row visible with status (RISK-OFF/POSITIVE FLOW/NEUTRAL). ✓ All 4 required headlines present: FEDSPEECH (+0.6), SEC (-0.3), SEBI (-0.4), RBI (+0.5). ✓ Headline scores with +/- values displaying correctly. ✓ Backend API endpoint /api/hybrid/regulatory/sentiment working correctly. ✓ No console errors. ✓ No network errors. ✓ Auto-refresh every 5 minutes implemented. All requirements from review_request verified and working correctly."
 
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 3
+  test_sequence: 4
   run_ui: false
 
 test_plan:
   current_focus:
-    - "QSC Trading Card - Stock Name Display and One-Click Functionality"
+    - "Regulatory Watchdog Panel - Main Gann Trader"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -192,3 +204,5 @@ agent_communication:
     message: "Tested Correlation Heatmap in Hybrid mode as requested. RESULT: ✓ WORKING CORRECTLY. BTC diagonal cell shows 0.98 (numeric value), not a dash. All diagonal cells show numeric values. Header shows 'Classical × Quantum Kernel'. All three correlation modes (FUSED, CLASSICAL, QUANTUM) work properly. Feature is fully functional with no issues found."
   - agent: "testing"
     message: "Tested QSC Trading Card stock name display and one-click functionality. RESULT: ✓ ALL TESTS PASSED. Stock names display correctly (Bitcoin, Reliance Industries, HDFC Bank) instead of symbols. One-click watchlist selection automatically triggers signal generation. Trading levels (Entry, Stop Loss, Targets) display correctly. Cartoon character changes based on signal direction. No 'Anchor:' label in QSC Trading Card. No console errors. All API requests working. Feature is fully functional."
+  - agent: "testing"
+    message: "Tested Regulatory Watchdog panel in main Gann Trader app. RESULT: ✓ ALL TESTS PASSED. Panel displays correctly in left sidebar below GannQSC Engine. Semicircle gauge with needle working. Label (HOSTILE/NEUTRAL/SUPPORTIVE/CAUTIOUS) displaying correctly. Score and Multiplier showing. NSE/BSE row with status visible. All 4 required headlines present (FEDSPEECH, SEC, SEBI, RBI) with +/- scores. Backend API /api/hybrid/regulatory/sentiment working. No console or network errors. Feature is fully functional."

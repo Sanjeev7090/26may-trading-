@@ -29,6 +29,7 @@ import PACSOAnalysis from './PACSOAnalysis';
 import StockNewsPopup from './StockNewsPopup';
 import HybridDashboard from './hybrid/HybridDashboard';
 import GannQSCPanel from './GannQSCPanel';
+import RegulatoryWatchdogPanel from './RegulatoryWatchdogPanel';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -319,6 +320,10 @@ const TradingDashboard = () => {
                     />
                   </div>
                 )}
+                {/* Regulatory Watchdog — global + Indian market sentiment */}
+                <div className="border-b border-white/10 p-3">
+                  <RegulatoryWatchdogPanel />
+                </div>
                 {signal && <div className="border-b border-white/10"><SignalDashboard signal={signal} /></div>}
                 {stockData && !isCrypto && <div className="border-b border-white/10"><SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} /></div>}
                 {selectedStock && selectedStock.type === 'INDEX' && <div className="border-b border-white/10"><OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} /></div>}
