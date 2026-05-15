@@ -28,6 +28,7 @@ import MiroFishAnalysis from './MiroFishAnalysis';
 import PACSOAnalysis from './PACSOAnalysis';
 import StockNewsPopup from './StockNewsPopup';
 import HybridDashboard from './hybrid/HybridDashboard';
+import GannQSCPanel from './GannQSCPanel';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -309,6 +310,15 @@ const TradingDashboard = () => {
                 <div className="p-3 border-b border-white/10">
                   <StockSearch onStockSelect={handleStockSelect} selectedStock={selectedStock} />
                 </div>
+                {/* GannQSC — super-fast in-RAM signal (auto-feeds when chart loads) */}
+                {stockData?.bars?.length > 0 && selectedStock && (
+                  <div className="border-b border-white/10 p-3">
+                    <GannQSCPanel
+                      bars={stockData.bars}
+                      ticker={isCrypto ? selectedStock.symbol : selectedStock.ticker}
+                    />
+                  </div>
+                )}
                 {signal && <div className="border-b border-white/10"><SignalDashboard signal={signal} /></div>}
                 {stockData && !isCrypto && <div className="border-b border-white/10"><SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} /></div>}
                 {selectedStock && selectedStock.type === 'INDEX' && <div className="border-b border-white/10"><OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} /></div>}

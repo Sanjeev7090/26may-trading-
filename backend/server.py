@@ -6250,6 +6250,226 @@ async def shutdown_db_client():
 
 
 # =====================================================================
+# GannQSC HYBRID ENGINE — Super-fast Gann × QSC in-memory signals
+# Ports QSC's single-core in-memory approach to the main Gann Trader.
+# Same mechanics: rolling RAM cache + O(n) Pearson + quantum kernel
+# =====================================================================
+import math   as _gm
+import time   as _gt
+import random as _gr
+
+# ── In-memory price cache  (ticker → {c, h, l, ts}) ──────────────────
+_GQSC_CACHE: dict = {}
+
+def _gqsc_feed(ticker: str, closes: list, highs: list, lows: list) -> None:
+    """Feed bars into GannQSC RAM cache — same pattern as _H_HISTORY."""
+    if not closes:
+        return
+    _GQSC_CACHE[ticker.upper()] = {
+        "c":  list(closes[-300:]),
+        "h":  list(highs[-300:]),
+        "l":  list(lows[-300:]),
+        "ts": _gt.time(),
+    }
+
+# ── Core maths — same O(n) primitives as QSC engine ─────────────────
+
+def _gqsc_pearson(x: list, y: list) -> float:
+    """Single-pass Pearson — identical to QSC's _h_pearson."""
+    n = min(len(x), len(y))
+    if n < 4:
+        return 0.0
+    x, y  = x[-n:], y[-n:]
+    mx, my = sum(x) / n, sum(y) / n
+    num    = sum((a - mx) * (b - my) for a, b in zip(x, y))
+    dx     = _gm.sqrt(sum((a - mx) ** 2 for a in x))
+    dy     = _gm.sqrt(sum((b - my) ** 2 for b in y))
+    return max(-1.0, min(1.0, num / (dx * dy))) if dx and dy else 0.0
+
+def _gqsc_quantum_kernel(x: list, y: list) -> float:
+    """Quantum-inspired cosine kernel — same tanh(cos·π/2)·1.05 as QSC."""
+    n = min(len(x), len(y))
+    if n < 4:
+        return 0.0
+    rx = [(x[i] - x[i-1]) / x[i-1] for i in range(1, n) if x[i-1] != 0]
+    ry = [(y[i] - y[i-1]) / y[i-1] for i in range(1, n) if y[i-1] != 0]
+    m  = min(len(rx), len(ry))
+    if m < 3:
+        return 0.0
+    rx, ry = rx[-m:], ry[-m:]
+    dot = sum(a * b for a, b in zip(rx, ry))
+    nx  = _gm.sqrt(sum(a * a for a in rx)) or 1e-9
+    ny  = _gm.sqrt(sum(b * b for b in ry)) or 1e-9
+    cos = dot / (nx * ny)
+    return max(-1.0, min(1.0, _gm.tanh(cos * _gm.pi / 2) * 1.05))
+
+def _gqsc_fused(c: float, q: float) -> float:
+    """Weighted fusion — same 55/45 split as QSC's _h_fused."""
+    return 0.55 * c + 0.45 * q
+
+# ── Gann-specific fast primitives ────────────────────────────────────
+
+def _gqsc_gann_angle_score(closes: list) -> float:
+    """
+    Gann 1×1 angle score — pure Python O(n), no I/O.
+    Finds swing low in last 60 bars, projects 1×1 angle, returns
+    normalised deviation in [-1, 1]:  +1 = far above (BUY), -1 = far below (SELL).
+    """
+    n = len(closes)
+    if n < 5:
+        return 0.0
+    window = closes[-60:] if n >= 60 else closes
+    pivot_low   = min(window)
+    pivot_high  = max(window)
+    pivot_idx   = window.index(pivot_low)
+    bars_since  = len(window) - 1 - pivot_idx
+    price_range = (pivot_high - pivot_low) or 1.0
+    angle_1x1   = pivot_low + bars_since * (price_range / len(window))
+    diff        = (closes[-1] - angle_1x1) / price_range
+    return max(-1.0, min(1.0, _gm.tanh(diff * 3.0)))
+
+def _gqsc_momentum(closes: list) -> float:
+    """MA5 vs MA20 momentum — same logic as QSC's _h_momentum, normalised."""
+    n = len(closes)
+    if n < 20:
+        return 0.0
+    ma5  = sum(closes[-5:])  / 5
+    ma20 = sum(closes[-20:]) / 20
+    raw  = (ma5 - ma20) / (ma20 or 1)
+    return max(-1.0, min(1.0, _gm.tanh(raw * 50)))
+
+def _gqsc_octave_levels(closes: list, highs: list, lows: list) -> dict:
+    """
+    Gann Octave (1/8) support & resistance — O(n) pure Python.
+    Returns 9 levels from the 60-bar high/low range.
+    """
+    h60 = highs[-60:] if len(highs) >= 60 else highs
+    l60 = lows[-60:]  if len(lows)  >= 60 else lows
+    if not h60 or not l60:
+        return {}
+    high = max(h60);  low = min(l60);  rng = (high - low) or 1.0
+    return {
+        f"{'R' if i > 4 else 'S'}{abs(i-4)}_{i}": round(low + (i / 8) * rng, 4)
+        for i in range(9)
+    }
+
+def _gqsc_signal_label(score: float) -> tuple:
+    """Map fused score to (direction, strength, color)."""
+    if   score >  0.45: return "LONG",    "STRONG BUY",  "#00E676"
+    elif score >  0.15: return "LONG",    "BUY",          "#66FF99"
+    elif score < -0.45: return "SHORT",   "STRONG SELL",  "#FF3333"
+    elif score < -0.15: return "SHORT",   "SELL",         "#FF6666"
+    else:               return "NEUTRAL", "NEUTRAL",      "#888888"
+
+# ── Core computation ─────────────────────────────────────────────────
+
+def _gqsc_compute(ticker: str) -> dict:
+    """
+    Full GannQSC signal from RAM cache.  No network, no disk.
+    Typical runtime: 0.1 – 2 ms on a single core.
+    """
+    t0   = _gt.time()
+    data = _GQSC_CACHE.get(ticker.upper())
+    if not data or len(data["c"]) < 10:
+        return {"ticker": ticker, "error": "no_cache",
+                "message": "Load the chart first to seed the cache."}
+
+    closes, highs, lows = data["c"], data["h"], data["l"]
+    current = closes[-1]
+
+    # 1. Gann 1×1 angle score
+    gann_sc = _gqsc_gann_angle_score(closes)
+
+    # 2. Quantum kernel on lag-1 returns (same as QSC diagonal)
+    rets = [(closes[i] - closes[i-1]) / closes[i-1]
+            for i in range(1, len(closes)) if closes[i-1] != 0]
+    q_sc = _gqsc_quantum_kernel(rets[:-1], rets[1:]) if len(rets) >= 5 else 0.0
+
+    # 3. Classical Pearson momentum (trend vs lag)
+    c_sc = _gqsc_pearson(closes[:-5], closes[5:]) if len(closes) >= 10 else 0.0
+
+    # 4. Short-term momentum
+    mom  = _gqsc_momentum(closes)
+
+    # 5. Fused score  (Gann 40 % + Quantum 35 % + Pearson 15 % + Momentum 10 %)
+    fused = (0.40 * gann_sc + 0.35 * q_sc + 0.15 * c_sc + 0.10 * mom)
+    fused = max(-1.0, min(1.0, fused))
+
+    direction, strength, color = _gqsc_signal_label(fused)
+
+    # 6. ATR-based intraday levels
+    is_crypto = "USDT" in ticker or ticker in {"BTC", "ETH", "SOL", "ADA"}
+    atr_pct   = 0.009 if is_crypto else 0.005
+    atr       = current * atr_pct
+    sl  = round(current - atr * 0.8,  4) if direction == "LONG" else round(current + atr * 0.8,  4)
+    t1  = round(current + atr * 1.0,  4) if direction == "LONG" else round(current - atr * 1.0,  4)
+    t2  = round(current + atr * 1.8,  4) if direction == "LONG" else round(current - atr * 1.8,  4)
+
+    # 7. Gann octave levels
+    octaves = _gqsc_octave_levels(closes, highs, lows)
+
+    ms = round((_gt.time() - t0) * 1000, 3)
+
+    return {
+        "ticker":        ticker.upper(),
+        "direction":     direction,
+        "strength":      strength,
+        "color":         color,
+        "gqsc_score":    round(fused,   4),
+        "gann_score":    round(gann_sc, 4),
+        "quantum_score": round(q_sc,    4),
+        "pearson_score": round(c_sc,    4),
+        "momentum":      round(mom,     4),
+        "price":         round(current, 4),
+        "sl":            sl,
+        "t1":            t1,
+        "t2":            t2,
+        "octave_levels": octaves,
+        "compute_ms":    ms,
+        "cache_bars":    len(closes),
+        "engine":        "GannQSC-v1",
+    }
+
+# ── Routes ────────────────────────────────────────────────────────────
+
+gann_qsc_router = APIRouter(prefix="/api/gann-qsc")
+
+@gann_qsc_router.post("/feed")
+async def gqsc_feed_endpoint(body: dict):
+    """
+    Seed GannQSC RAM cache with bar data fetched by the frontend.
+    Called automatically when the chart loads — zero extra latency.
+    """
+    ticker = str(body.get("ticker", "")).upper()
+    closes = [float(x) for x in body.get("closes", [])]
+    highs  = [float(x) for x in body.get("highs",  closes)]
+    lows   = [float(x) for x in body.get("lows",   closes)]
+    if ticker and len(closes) >= 10:
+        _gqsc_feed(ticker, closes, highs, lows)
+    return {"ok": True, "ticker": ticker, "bars": len(closes)}
+
+@gann_qsc_router.get("/signal/{ticker}")
+async def gqsc_signal_endpoint(ticker: str):
+    """
+    Instant Gann×QSC signal — reads entirely from RAM.
+    Typical latency: < 2 ms on single core.
+    """
+    result = _gqsc_compute(ticker)
+    return result
+
+@gann_qsc_router.get("/cache-status")
+async def gqsc_cache_status():
+    """Inspect what's loaded in the GannQSC RAM cache."""
+    return {
+        sym: {"bars": len(v["c"]), "last_price": v["c"][-1] if v["c"] else None,
+              "age_s": round(_gt.time() - v["ts"], 1)}
+        for sym, v in _GQSC_CACHE.items()
+    }
+
+app.include_router(gann_qsc_router)
+
+
+# =====================================================================
 # HYBRID MODE — QSC ENGINE ROUTES (prefix: /api/hybrid/)
 # =====================================================================
 import math as _math
