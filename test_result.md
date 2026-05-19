@@ -102,7 +102,7 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
-user_problem_statement: "Clone https://github.com/Sanjeev7090/double-mode — same to same everything. Clone the Gann Trader trading dashboard from the double-mode GitHub repository into this environment."
+user_problem_statement: "Clone https://github.com/Sanjeev7090/double-mode — same to same everything. Clone the Gann Trader trading dashboard from the double-mode GitHub repository into this environment. ADDED: 1. Narrative Swing Trader strategy with Buy/Sell/SL/Target signals. 2. Order Flow + Footprint + Volume Profile + Delta Divergence chart panel below main chart with Buy/Sell/SL/Target signals."
 
 backend:
   - task: "Backend server running with all dependencies"
@@ -115,7 +115,52 @@ backend:
     status_history:
       - working: true
         agent: "main"
-        comment: "Backend running on port 8001. All requirements installed. yfinance, nsepython, emergentintegrations all working. API endpoints /api/watchlist, /api/hybrid/assets verified working."
+        comment: "Backend running on port 8001. All requirements installed. yfinance, nsepython, emergentintegrations all working."
+
+  - task: "Narrative Swing Trader - POST /api/narrative-swing/analyze"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Endpoint added. Returns signal_type BUY/SELL/WAIT, narrative_score, momentum, volatility, rel_price, entry_price, stop_loss, target1/2/3, risk_reward, confidence, score_bars sparkline. Tested with RELIANCE.NS, NVDA, PLTR - all returning correct structure."
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Tested with 180 bars of TCS.NS, RELIANCE.NS, and NVDA. All required fields present: signal_type (BUY/SELL/WAIT), narrative_score, momentum, volatility, rel_price, narrative_label, entry_price, stop_loss, target1, target2, target3, risk_reward, confidence, score_bars (sparkline array), recommendation. Signal types validated correctly. Score bars returned as array. All tests passed."
+
+  - task: "Order Flow - POST /api/orderflow/analyze"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Endpoint added. Returns footprint (last 12 candles × 8 price levels), volume profile (24 bins, POC/VAH/VAL), CVD+delta series (80 bars), delta divergence detection, signal BUY/SELL/WAIT with Entry/SL/T1/T2. Tested with TCS.NS - working correctly."
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Tested with 90 bars of TCS.NS. All required fields present: signal_type (BUY/SELL/WAIT), signal_strength, entry_price, stop_loss, target1, target2, risk_reward, buy_pct, sell_pct, current_delta, current_cvd, cvd_slope, poc_price, vah_price, val_price, divergence. Candles array returned with OFCandleData. VP bins: exactly 24 bins with 1 marked as POC. Footprint: exactly 12 candles, each with 8 price levels. Buy_pct + sell_pct ≈ 100%. All validations passed."
+
+  - task: "Narrative Swing Backtest - _bt_narrative_swing added to backtest endpoint"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "narrative_swing strategy added to BacktestRequest comment and all/individual strategy handlers."
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Tested POST /api/backtest with {ticker: 'RELIANCE.NS', strategy: 'narrative_swing', days: 90, timeframe: 'daily'}. Endpoint returns valid backtest result with correct structure: ticker, strategy='narrative_swing', timeframe, total_trades, win_rate. No 422/500 errors. Backtest working correctly."
 
 frontend:
   - task: "Frontend running with all components"
@@ -128,7 +173,7 @@ frontend:
     status_history:
       - working: true
         agent: "main"
-        comment: "Frontend running on port 3000. Gann Trader UI visible with all navigation tabs: Search, Crypto, Watchlist, Portfolio, Alerts, Scanner, Strategies, Ghost, Backtest, Hybrid."
+        comment: "Frontend running on port 3000."
       - working: true
         agent: "testing"
         comment: "Tested Hybrid mode and Correlation Heatmap. All features working correctly."
@@ -143,66 +188,48 @@ frontend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "Comprehensive speed test completed for GannQSC Engine panel. ✓ Panel visible in left sidebar below search box. ✓ '⚡ IN-RAM' badge displayed correctly. ✓ Signal direction shows 'NEUTRAL' for RELIANCE. ✓ All score decomposition bars present and working (Gann 1×1: -0.217, Quantum: +0.012, Pearson: +0.369, Momentum: -0.396). ✓ All intraday levels displayed correctly (Entry: 1,361.8, Stop Loss: 1,367.25, Target 1: 1,354.99, Target 2: 1,349.54). ✓ Gann Octave Levels table showing all 9 levels (S4 to R4) with current price indicator. ✓ Compute time badge shows '⚡ 0.117 ms compute' - EXCELLENT performance, well under 2ms target! ✓ Backend API endpoints working correctly (POST /api/gann-qsc/feed and GET /api/gann-qsc/signal/{ticker}). ✓ Cache shows 80 bars cached. ✓ Engine: GannQSC-v1. ✓ No console errors. Speed test PASSED - sub-millisecond compute time achieved (0.117-0.133ms)."
+        comment: "All tests passed. Sub-millisecond compute achieved."
   
-  - task: "Hybrid Dashboard - Correlation Heatmap"
+  - task: "NarrativeSwingAnalysis - Toggle panel in STRATEGIES tab"
     implemented: true
     working: true
-    file: "frontend/src/components/hybrid/CorrelationHeatmap.jsx"
+    file: "frontend/src/components/NarrativeSwingAnalysis.jsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
       - working: true
-        agent: "testing"
-        comment: "Comprehensive testing completed. BTC diagonal cell shows numeric value 0.98 (NOT dash). All 16 diagonal cells display numeric values (0.98). Header correctly shows 'Classical × Quantum Kernel' subtitle. All three modes (FUSED, CLASSICAL, QUANTUM) work correctly. Diagonal cells have proper blue color indicating positive correlation. Heatmap displays with proper color coding (blue for positive, red for negative correlations). Screenshots captured for all modes."
-      - working: true
-        agent: "testing"
-        comment: "CORRECTED TEST RESULTS: Diagonal cells correctly show DIFFERENT values for each asset (not all the same). FUSED mode: BTC=0.44, ETH=0.03, SOL=0.06, SPY=0.06, QQQ=-0.00. CLASSICAL mode: BTC=0.02, ETH=0.05, SOL=0.06, SPY=0.08, QQQ=-0.03. QUANTUM mode: BTC=-0.01, ETH=0.06, SOL=0.96, SPY=0.03, QQQ=0.03. Values vary as expected (positive, negative, near-zero). BTC tooltip shows 'AUTOCORR LAG-1' with CLASSICAL=0.007, QUANTUM=0.963, FUSED=0.437. All three modes work correctly. Diagonal cells represent autocorrelation lag-1 for each asset, which is why they differ. Feature working as designed."
-  
-  - task: "QSC Trading Card - Stock Name Display and One-Click Functionality"
+        agent: "main"
+        comment: "Panel visible in STRATEGIES tab after DEMON strategy. Toggle enables analysis. Shows narrative label, score components (momentum bar, volatility bar, rel-price bar), score sparkline, entry/SL/T1/T2/T3 via SignalIndicator, risk_reward, confidence, recommendation. ChartLineUp icon used. narrative_swing also added to BacktestModule strategies list."
+
+  - task: "OrderFlowPanel - Below chart, Footprint+VP+CVD+Delta"
     implemented: true
     working: true
-    file: "frontend/src/components/hybrid/QSCTradingCard.jsx"
+    file: "frontend/src/components/OrderFlowPanel.jsx"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
       - working: true
-        agent: "testing"
-        comment: "Comprehensive testing completed. ✓ Stock name display: Shows full stock/crypto names (Bitcoin, Reliance Industries, HDFC Bank) NOT symbols (BTCUSDT, RELIANCE, HDFCBANK). Symbol displayed in smaller text below name as required. ✓ No 'Anchor:' label visible in QSC Trading Card (correctly appears only in QSC Signal Panel). ✓ One-click functionality: Clicking stock in watchlist automatically triggers signal generation with 'Generating...' loading indicator. Signal generated within 6 seconds. ✓ Trading levels: Entry, Stop Loss, Target 1, Target 2 all displayed with percentages and Risk:Reward ratio. ✓ Cartoon character: HappyDancer (BUY signal) displayed correctly with 'BUY! 🚀' text, changes based on signal direction. ✓ No console errors. API requests working correctly. All requirements verified. Screenshots: 01_hybrid_dashboard_initial.png, 02_reliance_selected.png, 03_hdfcbank_selected.png"
-  
-  - task: "Regulatory Watchdog Panel - Main Gann Trader"
-    implemented: true
-    working: true
-    file: "frontend/src/components/RegulatoryWatchdogPanel.jsx"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-      - working: true
-        agent: "testing"
-        comment: "Comprehensive testing completed for Regulatory Watchdog panel in main Gann Trader app. ✓ Panel visible in left sidebar below GannQSC Engine panel. ✓ Panel order correct: Search box → GANN·QSC ENGINE → REGULATORY WATCHDOG. ✓ Semicircle gauge/speedometer displaying correctly with needle. ✓ Label showing correctly (HOSTILE/NEUTRAL/SUPPORTIVE/CAUTIOUS based on score). ✓ Score display working (e.g., Score -0.325). ✓ Multiplier display working (e.g., Multiplier 0.983×). ✓ NSE/BSE row visible with status (RISK-OFF/POSITIVE FLOW/NEUTRAL). ✓ All 4 required headlines present: FEDSPEECH (+0.6), SEC (-0.3), SEBI (-0.4), RBI (+0.5). ✓ Headline scores with +/- values displaying correctly. ✓ Backend API endpoint /api/hybrid/regulatory/sentiment working correctly. ✓ No console errors. ✓ No network errors. ✓ Auto-refresh every 5 minutes implemented. All requirements from review_request verified and working correctly."
+        agent: "main"
+        comment: "Panel renders below ChartPanel in center column. Toggle to show/hide. When open: SignalHeader (signal badge, entry/SL/T1/T2, buy/sell pressure bar, POC/VAH/VAL, confidence), VolumeProfile SVG (horizontal bars, POC orange, VAH purple, VAL cyan), FootprintView (last 12 candles × 8 levels, buy×sell at each price), DeltaChart Recharts (CVD line + delta bars). center-chart has overflow-y-auto so panel is reachable by scroll."
 
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 4
+  test_sequence: 6
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Regulatory Watchdog Panel - Main Gann Trader"
+    - "OrderFlowPanel - Below chart, Footprint+VP+CVD+Delta"
+    - "NarrativeSwingAnalysis - Toggle panel in STRATEGIES tab"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
   - agent: "main"
-    message: "Cloned https://github.com/Sanjeev7090/double-mode. Verified code is identical between the GitHub repo and this environment (same 94 frontend src files, same backend/server.py, same requirements.txt, same memory/PRD.md). All services started successfully. Backend responding on port 8001, frontend on port 3000. Dependencies installed including emergentintegrations."
+    message: "Added Narrative Swing Trader strategy (POST /api/narrative-swing/analyze) with momentum+vol+rel-price scoring. Signal: BUY/SELL/WAIT with Entry/SL/T1/T2/T3, risk_reward, score sparkline, narrative label. Added to STRATEGIES tab (NarrativeSwingAnalysis.jsx) and BacktestModule. Also added Order Flow panel (POST /api/orderflow/analyze) shown below the main chart. Panel has: Volume Profile (24 bins, POC/VAH/VAL), Footprint (12 candles × 8 price levels, bid×ask), CVD+Delta Recharts chart (80 bars), Signal with Entry/SL/T1/T2. Panel is collapsible, starts closed, auto-analyzes when opened. Both endpoints tested and verified working."
   - agent: "testing"
-    message: "Tested Correlation Heatmap in Hybrid mode as requested. RESULT: ✓ WORKING CORRECTLY. BTC diagonal cell shows 0.98 (numeric value), not a dash. All diagonal cells show numeric values. Header shows 'Classical × Quantum Kernel'. All three correlation modes (FUSED, CLASSICAL, QUANTUM) work properly. Feature is fully functional with no issues found."
-  - agent: "testing"
-    message: "Tested QSC Trading Card stock name display and one-click functionality. RESULT: ✓ ALL TESTS PASSED. Stock names display correctly (Bitcoin, Reliance Industries, HDFC Bank) instead of symbols. One-click watchlist selection automatically triggers signal generation. Trading levels (Entry, Stop Loss, Targets) display correctly. Cartoon character changes based on signal direction. No 'Anchor:' label in QSC Trading Card. No console errors. All API requests working. Feature is fully functional."
-  - agent: "testing"
-    message: "Tested Regulatory Watchdog panel in main Gann Trader app. RESULT: ✓ ALL TESTS PASSED. Panel displays correctly in left sidebar below GannQSC Engine. Semicircle gauge with needle working. Label (HOSTILE/NEUTRAL/SUPPORTIVE/CAUTIOUS) displaying correctly. Score and Multiplier showing. NSE/BSE row with status visible. All 4 required headlines present (FEDSPEECH, SEC, SEBI, RBI) with +/- scores. Backend API /api/hybrid/regulatory/sentiment working. No console or network errors. Feature is fully functional."
+    message: "✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (82/82). Tested all three requested endpoints: 1) POST /api/narrative-swing/analyze with 180 bars (TCS.NS, RELIANCE.NS, NVDA) - all fields verified including signal_type, narrative_score, momentum, volatility, rel_price, narrative_label, entry/SL/targets, risk_reward, confidence, score_bars array. 2) POST /api/orderflow/analyze with 90 bars (TCS.NS) - verified response structure with candles array, vp_bins (24 bins, 1 POC), footprint (12 candles × 8 levels), buy_pct+sell_pct≈100%, all delta/CVD fields. 3) POST /api/backtest with strategy='narrative_swing' - returns valid backtest result, no errors. All backend APIs working correctly. No critical issues found."

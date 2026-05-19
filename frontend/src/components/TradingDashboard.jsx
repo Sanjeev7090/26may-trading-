@@ -30,6 +30,8 @@ import StockNewsPopup from './StockNewsPopup';
 import HybridDashboard from './hybrid/HybridDashboard';
 import GannQSCPanel from './GannQSCPanel';
 import RegulatoryWatchdogPanel from './RegulatoryWatchdogPanel';
+import NarrativeSwingAnalysis from './NarrativeSwingAnalysis';
+import OrderFlowPanel from './OrderFlowPanel';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -339,20 +341,27 @@ const TradingDashboard = () => {
         </aside>
 
         {/* Center Chart */}
-        <main className={`lg:col-span-6 xl:col-span-7 flex flex-col relative min-h-[300px] lg:min-h-0 ${mobilePanel !== 'chart' ? 'hidden lg:flex' : 'flex'}`} data-testid="center-chart">
-          <ChartPanel
-            stockData={stockData}
-            loading={loading}
-            selectedStock={selectedStock}
-            onPivotSelect={handlePivotSelect}
-            pivotPoint={pivotPoint}
-            gannFan={gannFan}
-            semiLogScale={semiLogScale}
-            setSemiLogScale={setSemiLogScale}
-            timeframe={timeframe}
-            onTimeframeChange={handleTimeframeChange}
-            isCrypto={isCrypto}
-          />
+        <main className={`lg:col-span-6 xl:col-span-7 flex flex-col relative min-h-[300px] lg:min-h-0 overflow-y-auto ${mobilePanel !== 'chart' ? 'hidden lg:flex' : 'flex'}`} data-testid="center-chart">
+          {/* Chart — fixed height so OrderFlow is reachable by scrolling */}
+          <div className="shrink-0" style={{ height: 'calc(100vh - 120px)', minHeight: '380px' }}>
+            <ChartPanel
+              stockData={stockData}
+              loading={loading}
+              selectedStock={selectedStock}
+              onPivotSelect={handlePivotSelect}
+              pivotPoint={pivotPoint}
+              gannFan={gannFan}
+              semiLogScale={semiLogScale}
+              setSemiLogScale={setSemiLogScale}
+              timeframe={timeframe}
+              onTimeframeChange={handleTimeframeChange}
+              isCrypto={isCrypto}
+            />
+          </div>
+          {/* Order Flow Panel — below chart, scroll to see */}
+          {stockData?.bars?.length >= 30 && (
+            <OrderFlowPanel stockData={stockData} selectedStock={selectedStock} />
+          )}
         </main>
 
         {/* Right Sidebar */}
@@ -394,6 +403,7 @@ const TradingDashboard = () => {
                     <AIIndicatorScore stockData={stockData} selectedStock={selectedStock} />
                     <GodzillaSetupAnalysis stockData={stockData} selectedStock={selectedStock} />
                     <DemonAnalysis stockData={stockData} selectedStock={selectedStock} />
+                    <NarrativeSwingAnalysis stockData={stockData} selectedStock={selectedStock} />
                   </>
                 )}
                 {!selectedStock && (

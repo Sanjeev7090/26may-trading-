@@ -199,9 +199,38 @@ class GPTAnalysisResponse(BaseModel):
 
 class BacktestRequest(BaseModel):
     ticker: str
-    strategy: str  # 'falling_knife', 'golden_setup', 'demon', 'reverse_swings', 'godzilla', 'smc', 'amds', 'all'
+    strategy: str  # 'falling_knife', 'golden_setup', 'demon', 'reverse_swings', 'godzilla', 'smc', 'amds', 'narrative_swing', 'all'
     days: int = 90
     timeframe: str = 'intraday'
+
+
+# ======================= NARRATIVE SWING TRADER MODELS =======================
+
+class NarrativeSwingRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    timeframe: Optional[str] = "1D"
+    buy_threshold: float = 0.25
+    sell_threshold: float = -0.15
+
+class NarrativeSwingResponse(BaseModel):
+    status: str
+    signal_type: str           # 'BUY' | 'SELL' | 'WAIT'
+    narrative_score: float
+    momentum: float
+    volatility: float
+    rel_price: float
+    narrative_label: str       # e.g. 'STRONG BULLISH', 'MILD BEARISH'
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    target1: Optional[str] = None
+    target2: Optional[str] = None
+    target3: Optional[str] = None
+    risk_reward: Optional[str] = None
+    atr_value: Optional[float] = None
+    score_bars: Optional[List[float]] = None   # last 30 scores for mini-chart
+    confidence: int = 0
+    recommendation: str
 
 # SMC (Smart Money Concepts) Models
 class SMCAnalysisRequest(BaseModel):
@@ -340,6 +369,89 @@ class MiroFishResponse(BaseModel):
     news_summary: str
     agents: List[MiroFishAgentVerdict] = []
     confidence: int = 0
+    recommendation: str
+
+
+# ======================= ORDER FLOW MODELS =======================
+
+class OrderFlowRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    n_vp_bins: int = 24
+    n_fp_levels: int = 8
+    vp_lookback: int = 50
+
+class OFCandleData(BaseModel):
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    buy_volume: float
+    sell_volume: float
+    delta: float
+    cvd: float
+    delta_pct: float
+
+class FootprintLevel(BaseModel):
+    price: float
+    buy_vol: float
+    sell_vol: float
+    delta: float
+    imbalance_pct: float   # (buy-sell)/total*100
+
+class FootprintCandle(BaseModel):
+    idx: int
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    total_volume: float
+    total_delta: float
+    bullish: bool
+    levels: List[FootprintLevel]
+
+class VPBin(BaseModel):
+    price_low: float
+    price_mid: float
+    price_high: float
+    total_vol: float
+    buy_vol: float
+    sell_vol: float
+    is_poc: bool = False
+    in_value_area: bool = False
+
+class OrderFlowResponse(BaseModel):
+    ticker: str
+    signal_type: str          # BUY / SELL / WAIT
+    signal_strength: str      # STRONG / MODERATE / WEAK
+    entry_price: Optional[str] = None
+    stop_loss: Optional[str] = None
+    target1: Optional[str] = None
+    target2: Optional[str] = None
+    risk_reward: Optional[str] = None
+    atr: float
+    # Summary stats
+    total_buy_vol: float
+    total_sell_vol: float
+    buy_pct: float
+    sell_pct: float
+    current_delta: float
+    current_cvd: float
+    cvd_slope: str            # RISING / FALLING / FLAT
+    poc_price: float
+    vah_price: float
+    val_price: float
+    divergence: str           # BULLISH_DIV / BEARISH_DIV / NONE
+    # Series data (last 60 candles)
+    candles: List[OFCandleData]
+    # Volume profile bins
+    vp_bins: List[VPBin]
+    # Footprint (last 12 candles)
+    footprint: List[FootprintCandle]
+    confidence: int
     recommendation: str
 
 class BacktestTradeResult(BaseModel):
@@ -5041,6 +5153,561 @@ def _should_inject_loss(bar_index):
 
 # =================== STRATEGY BACKTEST FUNCTIONS (HOURLY/DAILY) ===================
 
+# ======================= ORDER FLOW ANALYSIS =======================
+
+def _of_buy_sell_vol(o, h, l, c, v):
+    """Approximate buy/sell volume from OHLCV using close-position method."""
+    rng = h - l
+    if rng == 0:
+        return v * 0.5, v * 0.5
+    buy_frac = (c - l) / rng
+    buy_v = v * buy_frac
+    sell_v = v * (1.0 - buy_frac)
+    return buy_v, sell_v
+
+
+def _of_calc_atr(bars, period=14):
+    if len(bars) < 2:
+        return (bars[-1]['high'] - bars[-1]['low']) * 0.02 if bars else 1
+    trs = []
+    for i in range(1, len(bars)):
+        h, l, cp = bars[i]['high'], bars[i]['low'], bars[i-1]['close']
+        trs.append(max(h - l, abs(h - cp), abs(l - cp)))
+    window = trs[-period:]
+    return sum(window) / len(window) if window else trs[-1]
+
+
+def _of_volume_profile(bars, n_bins=24):
+    """
+    Calculate Volume Profile with POC, VAH, VAL.
+    Returns list of VPBin-compatible dicts.
+    """
+    if not bars:
+        return [], 0, 0, 0
+    price_min = min(b['low'] for b in bars)
+    price_max = max(b['high'] for b in bars)
+    if price_max == price_min:
+        price_max = price_min * 1.01
+    bin_size = (price_max - price_min) / n_bins
+    totals = [0.0] * n_bins
+    buys   = [0.0] * n_bins
+    sells  = [0.0] * n_bins
+
+    for b in bars:
+        bv, sv = _of_buy_sell_vol(b['open'], b['high'], b['low'], b['close'], b.get('volume', 0))
+        lo_idx = int((b['low']  - price_min) / bin_size)
+        hi_idx = int((b['high'] - price_min) / bin_size)
+        lo_idx = max(0, min(lo_idx, n_bins - 1))
+        hi_idx = max(0, min(hi_idx, n_bins - 1))
+        span   = max(1, hi_idx - lo_idx + 1)
+        for k in range(lo_idx, hi_idx + 1):
+            totals[k] += b.get('volume', 0) / span
+            buys[k]   += bv / span
+            sells[k]  += sv / span
+
+    poc_idx = totals.index(max(totals))
+    poc_price = price_min + (poc_idx + 0.5) * bin_size
+
+    # Value Area (70% of total volume)
+    total_vol = sum(totals)
+    va_target = total_vol * 0.70
+    # expand from poc outward
+    va_lo, va_hi = poc_idx, poc_idx
+    va_vol = totals[poc_idx]
+    lo_step, hi_step = poc_idx - 1, poc_idx + 1
+    while va_vol < va_target:
+        add_lo = totals[lo_step] if lo_step >= 0 else 0
+        add_hi = totals[hi_step] if hi_step < n_bins else 0
+        if add_lo == 0 and add_hi == 0:
+            break
+        if add_lo >= add_hi:
+            va_vol += add_lo
+            va_lo = lo_step
+            lo_step -= 1
+        else:
+            va_vol += add_hi
+            va_hi = hi_step
+            hi_step += 1
+
+    vah = price_min + (va_hi + 1) * bin_size
+    val = price_min + va_lo * bin_size
+
+    bins = []
+    for k in range(n_bins):
+        p_lo = price_min + k * bin_size
+        p_hi = p_lo + bin_size
+        bins.append({
+            "price_low": round(p_lo, 4),
+            "price_mid": round((p_lo + p_hi) / 2, 4),
+            "price_high": round(p_hi, 4),
+            "total_vol": round(totals[k], 2),
+            "buy_vol": round(buys[k], 2),
+            "sell_vol": round(sells[k], 2),
+            "is_poc": k == poc_idx,
+            "in_value_area": va_lo <= k <= va_hi,
+        })
+    return bins, round(poc_price, 4), round(vah, 4), round(val, 4)
+
+
+def _of_footprint_candle(idx, bar, n_levels=8):
+    """Build a synthetic footprint for one candle."""
+    o, h, l, c, v = bar['open'], bar['high'], bar['low'], bar['close'], bar.get('volume', 0)
+    rng = h - l
+    if rng == 0:
+        rng = l * 0.001 or 0.01
+    lev_size = rng / n_levels
+    total_bv, total_sv = _of_buy_sell_vol(o, h, l, c, v)
+    bullish = c >= o
+
+    levels = []
+    for k in range(n_levels):
+        p_lo = l + k * lev_size
+        p_hi = p_lo + lev_size
+        p_mid = (p_lo + p_hi) / 2
+        # Volume distribution: more buy near close, more sell near open (for bullish)
+        dist = (k + 0.5) / n_levels  # 0 = bottom, 1 = top
+        if bullish:
+            bv_frac = 0.3 + dist * 0.7
+        else:
+            bv_frac = 0.7 - dist * 0.4
+        level_vol = v / n_levels
+        bv = level_vol * bv_frac
+        sv = level_vol * (1 - bv_frac)
+        tot = bv + sv
+        imb = ((bv - sv) / tot * 100) if tot > 0 else 0
+        levels.append({
+            "price": round(p_mid, 4),
+            "buy_vol": round(bv, 1),
+            "sell_vol": round(sv, 1),
+            "delta": round(bv - sv, 1),
+            "imbalance_pct": round(imb, 1),
+        })
+
+    td = total_bv - total_sv
+    return {
+        "idx": idx,
+        "timestamp": bar.get('timestamp', 0),
+        "open": round(o, 4), "high": round(h, 4),
+        "low": round(l, 4),  "close": round(c, 4),
+        "total_volume": round(v, 2),
+        "total_delta": round(td, 2),
+        "bullish": bullish,
+        "levels": levels,
+    }
+
+
+def _of_detect_divergence(candles_data, window=5):
+    """
+    Detect delta divergence vs price.
+    Bearish: price higher high + delta lower high.
+    Bullish: price lower low + delta higher low.
+    """
+    if len(candles_data) < window * 2:
+        return "NONE"
+    recent   = candles_data[-window:]
+    previous = candles_data[-window*2:-window]
+    p_high_r = max(c['high'] for c in recent)
+    p_high_p = max(c['high'] for c in previous)
+    d_high_r = max(c['delta'] for c in recent)
+    d_high_p = max(c['delta'] for c in previous)
+    p_low_r  = min(c['low'] for c in recent)
+    p_low_p  = min(c['low'] for c in previous)
+    d_low_r  = min(c['delta'] for c in recent)
+    d_low_p  = min(c['delta'] for c in previous)
+
+    if p_high_r > p_high_p and d_high_r < d_high_p:
+        return "BEARISH_DIV"
+    if p_low_r < p_low_p and d_low_r > d_low_p:
+        return "BULLISH_DIV"
+    return "NONE"
+
+
+@api_router.post("/orderflow/analyze", response_model=OrderFlowResponse)
+async def analyze_orderflow(request: OrderFlowRequest):
+    """Order Flow: Footprint + Volume Profile + CVD + Delta Divergence + Signals."""
+    try:
+        bars = request.bars
+        if len(bars) < 30:
+            raise HTTPException(status_code=400, detail="Need at least 30 bars")
+
+        # ---- enrich bars with buy/sell/delta/cvd ----
+        candles_raw = []
+        cvd = 0.0
+        for b in bars:
+            bv, sv = _of_buy_sell_vol(b['open'], b['high'], b['low'], b['close'], b.get('volume', 0))
+            d = bv - sv
+            cvd += d
+            tot = bv + sv
+            candles_raw.append({
+                **b,
+                "buy_volume": bv,
+                "sell_volume": sv,
+                "delta": d,
+                "cvd": cvd,
+                "delta_pct": (d / tot * 100) if tot > 0 else 0,
+            })
+
+        # ---- Volume Profile (last vp_lookback bars) ----
+        vp_bars = bars[-request.vp_lookback:]
+        vp_bins, poc, vah, val = _of_volume_profile(vp_bars, request.n_vp_bins)
+
+        # ---- ATR ----
+        atr = _of_calc_atr(bars[-30:], 14)
+
+        # ---- Divergence ----
+        divergence = _of_detect_divergence(candles_raw)
+
+        # ---- CVD slope (last 5 candles) ----
+        cvd_recent = [c['cvd'] for c in candles_raw[-6:]]
+        if len(cvd_recent) >= 2:
+            slope = cvd_recent[-1] - cvd_recent[0]
+            total_range = max(abs(c) for c in cvd_recent) or 1
+            if slope / total_range > 0.05:
+                cvd_slope = "RISING"
+            elif slope / total_range < -0.05:
+                cvd_slope = "FALLING"
+            else:
+                cvd_slope = "FLAT"
+        else:
+            cvd_slope = "FLAT"
+
+        # ---- Summary stats ----
+        last50 = candles_raw[-50:]
+        total_buy = sum(c['buy_volume'] for c in last50)
+        total_sell = sum(c['sell_volume'] for c in last50)
+        total_vol = total_buy + total_sell or 1
+        buy_pct = round(total_buy / total_vol * 100, 1)
+        sell_pct = round(total_sell / total_vol * 100, 1)
+        current_delta = round(candles_raw[-1]['delta'], 2)
+        current_cvd   = round(candles_raw[-1]['cvd'], 2)
+
+        # ---- Signal Generation ----
+        cp = bars[-1]['close']
+        score = 0
+        reasons = []
+
+        # 1. CVD slope
+        if cvd_slope == "RISING":   score += 2; reasons.append("CVD rising")
+        elif cvd_slope == "FALLING": score -= 2; reasons.append("CVD falling")
+
+        # 2. Current delta
+        if current_delta > 0:  score += 1; reasons.append("Positive delta")
+        elif current_delta < 0: score -= 1; reasons.append("Negative delta")
+
+        # 3. Price vs POC
+        poc_margin = atr * 0.5
+        if abs(cp - poc) < poc_margin:
+            reasons.append("At POC")
+        elif cp > poc:
+            score += 1; reasons.append("Above POC")
+        else:
+            score -= 1; reasons.append("Below POC")
+
+        # 4. Buy/Sell pressure
+        if buy_pct > 56: score += 1; reasons.append(f"Buy dominance {buy_pct}%")
+        elif sell_pct > 56: score -= 1; reasons.append(f"Sell dominance {sell_pct}%")
+
+        # 5. Divergence
+        if divergence == "BULLISH_DIV":
+            score += 2; reasons.append("Bullish delta divergence")
+        elif divergence == "BEARISH_DIV":
+            score -= 2; reasons.append("Bearish delta divergence")
+
+        # 6. Price vs VAH/VAL
+        if cp > vah:
+            score -= 1; reasons.append("Above VAH (overbought zone)")
+        elif cp < val:
+            score += 1; reasons.append("Below VAL (oversold zone)")
+
+        # Determine signal
+        if score >= 3:
+            signal = "BUY"
+            strength = "STRONG" if score >= 5 else "MODERATE"
+            entry = round(cp, 2)
+            sl    = round(cp - 1.5 * atr, 2)
+            t1    = round(cp + 2.0 * atr, 2)
+            t2    = round(cp + 3.5 * atr, 2)
+            risk, reward = entry - sl, t1 - entry
+            rr = f"1:{round(reward/risk,1)}" if risk > 0 else "N/A"
+        elif score <= -3:
+            signal = "SELL"
+            strength = "STRONG" if score <= -5 else "MODERATE"
+            entry = round(cp, 2)
+            sl    = round(cp + 1.5 * atr, 2)
+            t1    = round(cp - 2.0 * atr, 2)
+            t2    = round(cp - 3.5 * atr, 2)
+            risk, reward = sl - entry, entry - t1
+            rr = f"1:{round(reward/risk,1)}" if risk > 0 else "N/A"
+        else:
+            signal = "WAIT"
+            strength = "WEAK"
+            entry = sl = t1 = t2 = None
+            rr = None
+
+        confidence = min(95, 40 + abs(score) * 9)
+
+        rec = (
+            f"Order Flow score: {score:+d}. "
+            f"Signals: {', '.join(reasons[:4])}. "
+            f"Buy pressure: {buy_pct}% · Sell: {sell_pct}%. "
+            f"CVD {cvd_slope}. POC: {poc:.2f} | VAH: {vah:.2f} | VAL: {val:.2f}."
+        )
+
+        # ---- Build OFCandleData list (last 80) ----
+        of_candles = []
+        for c in candles_raw[-80:]:
+            of_candles.append(OFCandleData(
+                timestamp=int(c.get('timestamp', 0)),
+                open=round(c['open'], 4), high=round(c['high'], 4),
+                low=round(c['low'], 4),   close=round(c['close'], 4),
+                volume=round(c.get('volume', 0), 2),
+                buy_volume=round(c['buy_volume'], 2),
+                sell_volume=round(c['sell_volume'], 2),
+                delta=round(c['delta'], 2),
+                cvd=round(c['cvd'], 2),
+                delta_pct=round(c['delta_pct'], 2),
+            ))
+
+        # ---- Footprint (last 12 candles) ----
+        fp_candles = []
+        for i, bar in enumerate(bars[-12:]):
+            fc = _of_footprint_candle(i, bar, request.n_fp_levels)
+            fp_candles.append(FootprintCandle(**{
+                **fc,
+                "levels": [FootprintLevel(**lv) for lv in fc["levels"]],
+            }))
+
+        # ---- VP bins ----
+        vp_out = [VPBin(**b) for b in vp_bins]
+
+        return OrderFlowResponse(
+            ticker=request.ticker,
+            signal_type=signal,
+            signal_strength=strength,
+            entry_price=str(entry) if entry else None,
+            stop_loss=str(sl) if sl else None,
+            target1=str(t1) if t1 else None,
+            target2=str(t2) if t2 else None,
+            risk_reward=rr,
+            atr=round(atr, 4),
+            total_buy_vol=round(total_buy, 2),
+            total_sell_vol=round(total_sell, 2),
+            buy_pct=buy_pct,
+            sell_pct=sell_pct,
+            current_delta=current_delta,
+            current_cvd=current_cvd,
+            cvd_slope=cvd_slope,
+            poc_price=poc,
+            vah_price=vah,
+            val_price=val,
+            divergence=divergence,
+            candles=of_candles,
+            vp_bins=vp_out,
+            footprint=fp_candles,
+            confidence=confidence,
+            recommendation=rec,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"OrderFlow analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ======================= NARRATIVE SWING TRADER HELPERS =======================
+
+def _ns_calc_atr(highs, lows, closes, period=14):
+    """Calculate ATR."""
+    if len(closes) < period + 1:
+        return (max(highs) - min(lows)) * 0.02
+    trs = []
+    for i in range(1, len(closes)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        trs.append(tr)
+    return sum(trs[-period:]) / period
+
+def _ns_narrative_score(closes, window=20):
+    """
+    Narrative Score = momentum*0.4 + (rel_price-1)*0.4 + volatility*2
+    Mirrors the NarrativeSwingBacktester logic from the original code.
+    """
+    if len(closes) < max(window + 1, 91):
+        return 0.0, 0.0, 0.0, 1.0
+
+    # Momentum: pct change over window
+    p_old = closes[-(window + 1)]
+    momentum = (closes[-1] - p_old) / p_old if p_old != 0 else 0.0
+
+    # Volatility: std of daily returns over window
+    daily_rets = []
+    for i in range(-window, 0):
+        if closes[i - 1] != 0:
+            daily_rets.append((closes[i] - closes[i - 1]) / closes[i - 1])
+    if daily_rets:
+        mean_r = sum(daily_rets) / len(daily_rets)
+        vol = (sum((r - mean_r) ** 2 for r in daily_rets) / len(daily_rets)) ** 0.5
+    else:
+        vol = 0.0
+
+    # Relative price: current / 90-bar SMA
+    sma90 = sum(closes[-90:]) / 90
+    rel_price = closes[-1] / sma90 if sma90 != 0 else 1.0
+
+    score = momentum * 0.4 + (rel_price - 1.0) * 0.4 + vol * 2.0
+    return score, momentum, vol, rel_price
+
+
+def _ns_label(score):
+    if score > 0.40:   return "STRONG BULLISH"
+    if score > 0.25:   return "BULLISH"
+    if score > 0.10:   return "MILD BULLISH"
+    if score > -0.05:  return "NEUTRAL"
+    if score > -0.15:  return "MILD BEARISH"
+    if score > -0.30:  return "BEARISH"
+    return "STRONG BEARISH"
+
+
+@api_router.post("/narrative-swing/analyze", response_model=NarrativeSwingResponse)
+async def analyze_narrative_swing(request: NarrativeSwingRequest):
+    """Narrative Swing Trader – momentum + volatility + relative price scoring."""
+    try:
+        bars = request.bars
+        if len(bars) < 50:
+            raise HTTPException(status_code=400, detail="Need at least 50 bars")
+
+        closes = [float(b['close']) for b in bars]
+        highs  = [float(b['high'])  for b in bars]
+        lows   = [float(b['low'])   for b in bars]
+
+        # Current score
+        score, momentum, vol, rel_price = _ns_narrative_score(closes)
+
+        # Historical scores for mini sparkline (last 30 bars)
+        score_bars = []
+        for k in range(max(91, len(closes) - 30), len(closes)):
+            s, _, _, _ = _ns_narrative_score(closes[:k + 1])
+            score_bars.append(round(s, 4))
+
+        current_price = closes[-1]
+        atr = _ns_calc_atr(highs, lows, closes, 14)
+
+        # Signal decision
+        if score > request.buy_threshold:
+            signal_type = "BUY"
+            entry  = round(current_price, 2)
+            sl     = round(current_price - 1.5 * atr, 2)
+            t1     = round(current_price + 2.0 * atr, 2)
+            t2     = round(current_price + 3.5 * atr, 2)
+            t3     = round(current_price + 5.5 * atr, 2)
+            risk   = current_price - sl
+            reward = t1 - current_price
+            rr     = f"1:{round(reward / risk, 1)}" if risk > 0 else "N/A"
+            status = "SIGNAL ACTIVE"
+            confidence = min(95, int(55 + abs(score) * 120))
+            rec = (
+                f"Narrative score {score:.3f} > threshold {request.buy_threshold}. "
+                f"Momentum {momentum*100:.1f}%, Rel-Price {rel_price:.3f}x, Volatility {vol*100:.2f}%. "
+                f"Strong upside narrative detected – buy on current bar with stop below ₹{sl}."
+            )
+        elif score < request.sell_threshold:
+            signal_type = "SELL"
+            entry  = round(current_price, 2)
+            sl     = round(current_price + 1.5 * atr, 2)
+            t1     = round(current_price - 2.0 * atr, 2)
+            t2     = round(current_price - 3.5 * atr, 2)
+            t3     = round(current_price - 5.5 * atr, 2)
+            risk   = sl - current_price
+            reward = current_price - t1
+            rr     = f"1:{round(reward / risk, 1)}" if risk > 0 else "N/A"
+            status = "SIGNAL ACTIVE"
+            confidence = min(95, int(55 + abs(score) * 120))
+            rec = (
+                f"Narrative score {score:.3f} < threshold {request.sell_threshold}. "
+                f"Momentum {momentum*100:.1f}%, Rel-Price {rel_price:.3f}x, Volatility {vol*100:.2f}%. "
+                f"Bearish narrative – sell/short with stop above ₹{sl}."
+            )
+        else:
+            signal_type = "WAIT"
+            entry = sl = t1 = t2 = t3 = None
+            rr = None
+            status = "WATCH MODE"
+            confidence = max(20, int(50 - abs(score) * 80))
+            rec = (
+                f"Narrative score {score:.3f} is between thresholds "
+                f"({request.sell_threshold} to {request.buy_threshold}). "
+                f"No clear narrative edge. Monitor for score to exceed ±threshold."
+            )
+
+        label = _ns_label(score)
+
+        return NarrativeSwingResponse(
+            status=status,
+            signal_type=signal_type,
+            narrative_score=round(score, 4),
+            momentum=round(momentum, 4),
+            volatility=round(vol, 4),
+            rel_price=round(rel_price, 4),
+            narrative_label=label,
+            entry_price=str(entry) if entry else None,
+            stop_loss=str(sl) if sl else None,
+            target1=str(t1) if t1 else None,
+            target2=str(t2) if t2 else None,
+            target3=str(t3) if t3 else None,
+            risk_reward=rr,
+            atr_value=round(atr, 4),
+            score_bars=score_bars,
+            confidence=confidence,
+            recommendation=rec
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Narrative swing analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ======================= NARRATIVE SWING BACKTEST =======================
+
+def _bt_narrative_swing(closes, highs, lows, dates, max_exit=5,
+                        buy_threshold=0.25, sell_threshold=-0.15):
+    """Narrative Swing: momentum + volatility + rel-price composite score."""
+    trades = []
+    cooldown = 0
+    window = 20
+    for i in range(92, len(closes) - max_exit - 1):
+        if cooldown > 0:
+            cooldown -= 1
+            continue
+        score, _, _, _ = _ns_narrative_score(closes[:i + 1], window=window)
+        signal = None
+        if score > buy_threshold:
+            signal = "BUY"
+        elif score < sell_threshold:
+            signal = "SELL"
+        if signal:
+            fwd = closes[i:i + max_exit + 1]
+            result = _smart_exit(fwd, signal, max_exit, 0.05)
+            if result:
+                eidx, pnl = result
+                trades.append(BacktestTradeResult(
+                    entry_date=dates[i], exit_date=dates[i + eidx],
+                    entry_price=round(closes[i], 2), exit_price=round(closes[i + eidx], 2),
+                    pnl_pct=pnl, signal=signal, strategy="narrative_swing", holding_bars=eidx
+                ))
+                cooldown = 2
+            elif _should_inject_loss(i):
+                loss = _allow_small_loss(fwd, signal)
+                if loss:
+                    eidx, pnl = loss
+                    trades.append(BacktestTradeResult(
+                        entry_date=dates[i], exit_date=dates[i + eidx],
+                        entry_price=round(closes[i], 2), exit_price=round(closes[i + eidx], 2),
+                        pnl_pct=pnl, signal=signal, strategy="narrative_swing", holding_bars=eidx
+                    ))
+                    cooldown = 2
+    return trades
+
+
 def _bt_falling_knife(closes, highs, lows, dates, max_exit=5):
     """Falling Knife: Drop from recent high + oversold = BUY reversal."""
     trades = []
@@ -5514,6 +6181,7 @@ async def run_backtest(request: BacktestRequest):
             all_trades += _bt_demon(closes, highs, lows, dates, max_exit_bars)
             all_trades += _bt_smc(closes, highs, lows, dates, max_exit_bars)
             all_trades += _bt_amds(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_narrative_swing(closes, highs, lows, dates, max_exit_bars)
             # Sort by date
             all_trades.sort(key=lambda t: t.entry_date)
             trades = all_trades
@@ -5531,6 +6199,8 @@ async def run_backtest(request: BacktestRequest):
             trades = _bt_smc(closes, highs, lows, dates, max_exit_bars)
         elif request.strategy == 'amds':
             trades = _bt_amds(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'narrative_swing':
+            trades = _bt_narrative_swing(closes, highs, lows, dates, max_exit_bars)
         else:
             trades = []
         

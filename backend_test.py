@@ -537,6 +537,280 @@ class GannTradingAPITester:
             data=gpt_request
         )[0]
 
+    def test_narrative_swing_endpoint(self):
+        """Test Narrative Swing Trader endpoint with 180 bars"""
+        print("\n🎯 Testing NARRATIVE SWING TRADER endpoint...")
+        
+        # Fetch 180 bars of TCS.NS data
+        success, stock_data = self.run_test(
+            "Get 180 bars for Narrative Swing (TCS.NS)", 
+            "GET", 
+            "stock/bars/TCS.NS",
+            params={"limit": 180}
+        )
+        
+        if not success or not stock_data.get('bars'):
+            self.log_test("Narrative Swing - No Stock Data", False, "Cannot test without 180 bars")
+            return False
+        
+        bars = stock_data['bars']
+        if len(bars) < 50:
+            self.log_test("Narrative Swing - Insufficient Bars", False, f"Got {len(bars)} bars, need at least 50")
+            return False
+        
+        # Test with TCS.NS
+        narrative_request = {
+            "ticker": "TCS.NS",
+            "bars": bars,
+            "timeframe": "1D"
+        }
+        
+        success1, data1 = self.run_test(
+            "Narrative Swing - TCS.NS", 
+            "POST", 
+            "narrative-swing/analyze", 
+            data=narrative_request
+        )
+        
+        # Validate response structure
+        if success1 and data1:
+            required_fields = [
+                'signal_type', 'narrative_score', 'momentum', 'volatility', 
+                'rel_price', 'narrative_label', 'entry_price', 'stop_loss', 
+                'target1', 'target2', 'target3', 'risk_reward', 'confidence', 
+                'score_bars', 'recommendation'
+            ]
+            missing_fields = [field for field in required_fields if field not in data1]
+            if missing_fields:
+                self.log_test("Narrative Swing Response Structure", False, f"Missing fields: {missing_fields}")
+            else:
+                self.log_test("Narrative Swing Response Structure", True, 
+                             f"Signal: {data1.get('signal_type')}, Score: {data1.get('narrative_score')}, Label: {data1.get('narrative_label')}")
+                
+                # Validate signal_type
+                signal_type = data1.get('signal_type')
+                if signal_type not in ['BUY', 'SELL', 'WAIT']:
+                    self.log_test("Narrative Swing Signal Type", False, f"Invalid signal_type: {signal_type}")
+                else:
+                    self.log_test("Narrative Swing Signal Type", True, f"Valid signal: {signal_type}")
+                
+                # Validate score_bars is a list
+                score_bars = data1.get('score_bars', [])
+                if isinstance(score_bars, list):
+                    self.log_test("Narrative Swing Score Bars", True, f"Score bars count: {len(score_bars)}")
+                else:
+                    self.log_test("Narrative Swing Score Bars", False, "score_bars is not a list")
+        
+        # Test with RELIANCE.NS
+        success2, stock_data2 = self.run_test(
+            "Get bars for Narrative Swing (RELIANCE.NS)", 
+            "GET", 
+            "stock/bars/RELIANCE.NS",
+            params={"limit": 180}
+        )
+        
+        if success2 and stock_data2.get('bars'):
+            narrative_request2 = {
+                "ticker": "RELIANCE.NS",
+                "bars": stock_data2['bars'],
+                "timeframe": "1D"
+            }
+            success2, data2 = self.run_test(
+                "Narrative Swing - RELIANCE.NS", 
+                "POST", 
+                "narrative-swing/analyze", 
+                data=narrative_request2
+            )
+        
+        # Test with NVDA (US stock)
+        success3, stock_data3 = self.run_test(
+            "Get bars for Narrative Swing (NVDA)", 
+            "GET", 
+            "stock/bars/NVDA",
+            params={"limit": 180}
+        )
+        
+        if success3 and stock_data3.get('bars'):
+            narrative_request3 = {
+                "ticker": "NVDA",
+                "bars": stock_data3['bars'],
+                "timeframe": "1D"
+            }
+            success3, data3 = self.run_test(
+                "Narrative Swing - NVDA", 
+                "POST", 
+                "narrative-swing/analyze", 
+                data=narrative_request3
+            )
+        
+        return success1 and success2 and success3
+
+    def test_orderflow_endpoint(self):
+        """Test Order Flow endpoint with 90 bars"""
+        print("\n📊 Testing ORDER FLOW endpoint...")
+        
+        # Fetch 90 bars of TCS.NS data
+        success, stock_data = self.run_test(
+            "Get 90 bars for Order Flow (TCS.NS)", 
+            "GET", 
+            "stock/bars/TCS.NS",
+            params={"limit": 90}
+        )
+        
+        if not success or not stock_data.get('bars'):
+            self.log_test("Order Flow - No Stock Data", False, "Cannot test without 90 bars")
+            return False
+        
+        bars = stock_data['bars']
+        if len(bars) < 30:
+            self.log_test("Order Flow - Insufficient Bars", False, f"Got {len(bars)} bars, need at least 30")
+            return False
+        
+        # Test Order Flow analysis
+        orderflow_request = {
+            "ticker": "TCS.NS",
+            "bars": bars,
+            "n_vp_bins": 24,
+            "n_fp_levels": 8,
+            "vp_lookback": 50
+        }
+        
+        success1, data1 = self.run_test(
+            "Order Flow - TCS.NS", 
+            "POST", 
+            "orderflow/analyze", 
+            data=orderflow_request
+        )
+        
+        # Validate response structure
+        if success1 and data1:
+            required_fields = [
+                'signal_type', 'signal_strength', 'entry_price', 'stop_loss', 
+                'target1', 'target2', 'risk_reward', 'buy_pct', 'sell_pct', 
+                'current_delta', 'current_cvd', 'cvd_slope', 'poc_price', 
+                'vah_price', 'val_price', 'divergence', 'candles', 'vp_bins', 'footprint'
+            ]
+            missing_fields = [field for field in required_fields if field not in data1]
+            if missing_fields:
+                self.log_test("Order Flow Response Structure", False, f"Missing fields: {missing_fields}")
+            else:
+                self.log_test("Order Flow Response Structure", True, 
+                             f"Signal: {data1.get('signal_type')}, Strength: {data1.get('signal_strength')}")
+                
+                # Validate signal_type
+                signal_type = data1.get('signal_type')
+                if signal_type not in ['BUY', 'SELL', 'WAIT']:
+                    self.log_test("Order Flow Signal Type", False, f"Invalid signal_type: {signal_type}")
+                else:
+                    self.log_test("Order Flow Signal Type", True, f"Valid signal: {signal_type}")
+                
+                # Validate candles array
+                candles = data1.get('candles', [])
+                if isinstance(candles, list):
+                    self.log_test("Order Flow Candles Array", True, f"Candles count: {len(candles)}")
+                else:
+                    self.log_test("Order Flow Candles Array", False, "candles is not a list")
+                
+                # Validate vp_bins array
+                vp_bins = data1.get('vp_bins', [])
+                if isinstance(vp_bins, list):
+                    poc_count = sum(1 for b in vp_bins if b.get('is_poc', False))
+                    self.log_test("Order Flow VP Bins", True, 
+                                 f"VP bins: {len(vp_bins)}, POC bins: {poc_count}")
+                    
+                    # Check if we have exactly 24 bins
+                    if len(vp_bins) == 24:
+                        self.log_test("Order Flow VP Bins Count", True, "Exactly 24 bins as expected")
+                    else:
+                        self.log_test("Order Flow VP Bins Count", False, 
+                                     f"Expected 24 bins, got {len(vp_bins)}")
+                    
+                    # Check if exactly one bin is marked as POC
+                    if poc_count == 1:
+                        self.log_test("Order Flow POC Marker", True, "Exactly 1 POC bin marked")
+                    else:
+                        self.log_test("Order Flow POC Marker", False, 
+                                     f"Expected 1 POC bin, got {poc_count}")
+                else:
+                    self.log_test("Order Flow VP Bins", False, "vp_bins is not a list")
+                
+                # Validate footprint array
+                footprint = data1.get('footprint', [])
+                if isinstance(footprint, list):
+                    self.log_test("Order Flow Footprint Array", True, f"Footprint candles: {len(footprint)}")
+                    
+                    # Check if we have exactly 12 footprint candles
+                    if len(footprint) == 12:
+                        self.log_test("Order Flow Footprint Count", True, "Exactly 12 candles as expected")
+                        
+                        # Check if each candle has 8 price levels
+                        if len(footprint) > 0:
+                            first_candle = footprint[0]
+                            levels = first_candle.get('levels', [])
+                            if len(levels) == 8:
+                                self.log_test("Order Flow Footprint Levels", True, 
+                                             "Each candle has 8 price levels")
+                            else:
+                                self.log_test("Order Flow Footprint Levels", False, 
+                                             f"Expected 8 levels per candle, got {len(levels)}")
+                    else:
+                        self.log_test("Order Flow Footprint Count", False, 
+                                     f"Expected 12 candles, got {len(footprint)}")
+                else:
+                    self.log_test("Order Flow Footprint Array", False, "footprint is not a list")
+                
+                # Validate buy_pct + sell_pct ≈ 100
+                buy_pct = data1.get('buy_pct', 0)
+                sell_pct = data1.get('sell_pct', 0)
+                total_pct = buy_pct + sell_pct
+                if 99 <= total_pct <= 101:
+                    self.log_test("Order Flow Buy/Sell Percentage", True, 
+                                 f"Buy: {buy_pct}%, Sell: {sell_pct}%, Total: {total_pct}%")
+                else:
+                    self.log_test("Order Flow Buy/Sell Percentage", False, 
+                                 f"Buy+Sell should ≈100%, got {total_pct}%")
+        
+        return success1
+
+    def test_narrative_swing_backtest(self):
+        """Test Backtest endpoint with narrative_swing strategy"""
+        print("\n🔄 Testing NARRATIVE SWING BACKTEST...")
+        
+        # Test narrative_swing strategy
+        backtest_request = {
+            "ticker": "RELIANCE.NS",
+            "strategy": "narrative_swing",
+            "days": 90,
+            "timeframe": "daily"
+        }
+        
+        success1, data1 = self.run_test(
+            "Backtest - narrative_swing (RELIANCE.NS)", 
+            "POST", 
+            "backtest", 
+            data=backtest_request
+        )
+        
+        # Validate response structure
+        if success1 and data1:
+            required_fields = ['ticker', 'strategy', 'timeframe', 'total_trades', 'win_rate']
+            missing_fields = [field for field in required_fields if field not in data1]
+            if missing_fields:
+                self.log_test("Narrative Swing Backtest Structure", False, f"Missing fields: {missing_fields}")
+            else:
+                self.log_test("Narrative Swing Backtest Structure", True, 
+                             f"Trades: {data1.get('total_trades')}, Win rate: {data1.get('win_rate')}%")
+                
+                # Verify strategy is narrative_swing
+                strategy = data1.get('strategy')
+                if strategy == 'narrative_swing':
+                    self.log_test("Narrative Swing Backtest Strategy", True, "Strategy correctly set")
+                else:
+                    self.log_test("Narrative Swing Backtest Strategy", False, 
+                                 f"Expected 'narrative_swing', got '{strategy}'")
+        
+        return success1
+
     def test_backtest_module(self):
         """Test NEW Backtest Engine - All Strategies & Timeframes"""
         print("\n🔥 Testing NEW BACKTEST ENGINE...")
@@ -668,6 +942,13 @@ class GannTradingAPITester:
         self.test_portfolio_crud()
         self.test_alerts_crud()
         self.test_gpt_analysis()
+        
+        # NARRATIVE SWING & ORDER FLOW TESTING
+        print("\n🎯 Testing NARRATIVE SWING & ORDER FLOW Features...")
+        self.test_narrative_swing_endpoint()
+        self.test_orderflow_endpoint()
+        self.test_narrative_swing_backtest()
+        
         self.test_backtest_module()
         
         # Utility tests
