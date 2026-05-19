@@ -4516,8 +4516,31 @@ async def auto_scan_ticker(ticker: str):
                 "day_target": calc_day_target(demon["signal_type"]),
             })
 
-        # SMC (Smart Money Concepts)
-        smc_result = run_full_smc_analysis(bars)
+        # SMC (Smart Money Concepts) — fetch DAILY bars to match manual SMC analysis
+        # Manual SMC uses stockData.bars which are daily bars (chart default = 1D).
+        # Using daily bars here ensures scanner result == manual result for the same stock.
+        try:
+            if is_crypto:
+                smc_bars = bars  # CoinGecko data is already daily-equivalent
+            else:
+                _smc_ticker = yf.Ticker(ticker)
+                _smc_hist = _smc_ticker.history(period="120d", interval="1d")
+                if not _smc_hist.empty and len(_smc_hist) >= 25:
+                    smc_bars = []
+                    for idx, row in _smc_hist.iterrows():
+                        smc_bars.append({
+                            "open": float(row['Open']), "high": float(row['High']),
+                            "low": float(row['Low']),   "close": float(row['Close']),
+                            "volume": float(row.get('Volume', 0)),
+                            "timestamp": int(idx.timestamp() * 1000) if hasattr(idx, 'timestamp') else 0,
+                        })
+                    smc_bars = smc_bars[-80:]  # last 80 daily bars — same as manual (slice(-80))
+                else:
+                    smc_bars = bars  # fallback to hourly if daily unavailable
+        except Exception:
+            smc_bars = bars  # fallback
+
+        smc_result = run_full_smc_analysis(smc_bars)
         if smc_result.get("signal_type") != "WAIT":
             smc_sl = float(smc_result["stop_loss"]) if smc_result.get("stop_loss") else round(current * 0.97, 2)
             smc_tp1 = float(smc_result["tp1"]) if smc_result.get("tp1") else round(current * 1.03, 2)
