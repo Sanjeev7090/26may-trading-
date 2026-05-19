@@ -275,31 +275,33 @@ const TradingDashboard = () => {
         </div>
       </header>
 
-      {/* Mobile Tab Bar */}
-      <div className="flex lg:hidden border-b border-white/10 shrink-0">
+      {/* Mobile Tab Bar — full-width 3-panel nav */}
+      <div className="flex lg:hidden border-b border-white/10 shrink-0 bg-[#0D0D0D]">
         {mobilePanels.map(p => (
           <button key={p.id} onClick={() => setMobilePanel(p.id)}
-            className={`flex-1 py-2 flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.15em] transition-colors ${
-              mobilePanel === p.id ? 'text-white border-b-2 border-white bg-white/5' : 'text-zinc-500'
+            className={`flex-1 py-3 flex flex-col items-center justify-center gap-0.5 transition-colors ${
+              mobilePanel === p.id
+                ? 'text-white border-b-2 border-[#00E676] bg-white/5'
+                : 'text-zinc-500'
             }`}
             data-testid={`mobile-panel-${p.id}`}>
-            <p.icon size={12} weight={mobilePanel === p.id ? 'fill' : 'regular'} />
-            {p.label}
+            <p.icon size={16} weight={mobilePanel === p.id ? 'fill' : 'regular'} />
+            <span className="text-[8px] font-bold uppercase tracking-widest">{p.label}</span>
           </button>
         ))}
       </div>
 
-      {/* Main Grid */}
-      <div className="flex-1 flex flex-col lg:grid lg:grid-cols-12 overflow-hidden" style={{ height: 'calc(100vh - 56px)' }}>
+      {/* Main Grid — explicit height for both mobile and desktop */}
+      <div className="flex flex-col lg:grid lg:grid-cols-12 overflow-hidden h-[calc(100vh-92px)] lg:h-[calc(100vh-56px)]">
 
         {/* Left Sidebar */}
         <aside className={`lg:col-span-3 xl:col-span-2 border-r border-white/10 flex flex-col overflow-y-auto ${mobilePanel !== 'left' ? 'hidden lg:flex' : 'flex'}`} data-testid="left-sidebar">
-          {/* Left Tabs */}
-          <div className="flex border-b border-white/10 shrink-0">
+          {/* Left Tabs — horizontally scrollable on mobile */}
+          <div className="flex border-b border-white/10 shrink-0 overflow-x-auto scrollbar-none">
             {leftTabs.map(tab => (
               <button key={tab.id} onClick={() => setLeftTab(tab.id)}
-                className={`flex-1 py-2 text-[9px] font-bold uppercase tracking-[0.15em] transition-colors ${
-                  leftTab === tab.id ? 'text-white border-b-2 border-white bg-white/5' : 'text-zinc-500 hover:text-zinc-300'
+                className={`flex-shrink-0 flex-1 min-w-[56px] py-2.5 px-1 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors whitespace-nowrap ${
+                  leftTab === tab.id ? 'text-white border-b-2 border-[#00E676] bg-white/5' : 'text-zinc-500 active:text-zinc-300'
                 }`}
                 data-testid={`left-tab-${tab.id}`}>
                 {tab.label}
@@ -341,9 +343,9 @@ const TradingDashboard = () => {
         </aside>
 
         {/* Center Chart */}
-        <main className={`lg:col-span-6 xl:col-span-7 flex flex-col relative min-h-[300px] lg:min-h-0 overflow-y-auto ${mobilePanel !== 'chart' ? 'hidden lg:flex' : 'flex'}`} data-testid="center-chart">
-          {/* Chart — fixed height so OrderFlow is reachable by scrolling */}
-          <div className="shrink-0" style={{ height: 'calc(100vh - 120px)', minHeight: '380px' }}>
+        <main className={`lg:col-span-6 xl:col-span-7 flex flex-col relative min-h-0 overflow-y-auto ${mobilePanel !== 'chart' ? 'hidden lg:flex' : 'flex'}`} data-testid="center-chart">
+          {/* Chart — h-full fills the grid cell, OrderFlow is below and scrollable */}
+          <div className="h-full shrink-0 min-h-[300px]">
             <ChartPanel
               stockData={stockData}
               loading={loading}
@@ -366,12 +368,12 @@ const TradingDashboard = () => {
 
         {/* Right Sidebar */}
         <aside className={`lg:col-span-3 border-l border-white/10 flex flex-col overflow-hidden ${mobilePanel !== 'right' ? 'hidden lg:flex' : 'flex'}`} data-testid="right-sidebar">
-          {/* Tabs */}
-          <div className="flex border-b border-white/10 shrink-0">
+          {/* Tabs — horizontally scrollable on mobile */}
+          <div className="flex border-b border-white/10 shrink-0 overflow-x-auto scrollbar-none">
             {rightTabs.map(tab => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 py-2.5 text-[9px] font-bold uppercase tracking-[0.15em] transition-colors ${
-                  activeTab === tab.id ? 'text-white border-b-2 border-white bg-white/5' : 'text-zinc-500 hover:text-zinc-300'
+                className={`flex-shrink-0 flex-1 min-w-[64px] py-2.5 px-2 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors whitespace-nowrap ${
+                  activeTab === tab.id ? 'text-white border-b-2 border-[#00E676] bg-white/5' : 'text-zinc-500 active:text-zinc-300'
                 }`}
                 data-testid={`tab-${tab.id}`}>
                 {tab.label}

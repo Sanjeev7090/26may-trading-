@@ -36,77 +36,79 @@ const pctBar    = (val, total, col) => (
 const SignalHeader = ({ d }) => {
   const col = sigColor(d.signal_type);
   return (
-    <div className="flex flex-wrap gap-2 items-start px-3 py-2 border-b border-white/10">
-      {/* Signal badge */}
-      <div className="flex flex-col items-center justify-center px-3 py-1.5 border min-w-[80px]"
-        style={{ borderColor: col + '60', backgroundColor: col + '12' }}>
-        <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">Signal</span>
-        <span className="text-lg font-black" style={{ color: col }}>{d.signal_type}</span>
-        <span className="text-[9px] font-mono" style={{ color: col + 'aa' }}>{d.signal_strength}</span>
-      </div>
+    <div className="px-3 py-2 border-b border-white/10 space-y-2">
+      {/* Row 1: Signal badge + Buy/Sell + Confidence */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* Signal badge */}
+        <div className="flex flex-col items-center justify-center px-3 py-1.5 border shrink-0"
+          style={{ borderColor: col + '60', backgroundColor: col + '12' }}>
+          <span className="text-[8px] font-mono text-zinc-500 uppercase">Signal</span>
+          <span className="text-base font-black" style={{ color: col }}>{d.signal_type}</span>
+          <span className="text-[8px] font-mono" style={{ color: col + 'aa' }}>{d.signal_strength}</span>
+        </div>
 
-      {/* Entry / SL / Targets */}
-      {d.signal_type !== 'WAIT' && (
-        <div className="flex flex-wrap gap-2 flex-1">
-          {[
-            { label: 'Entry',  val: d.entry_price, col: '#fff' },
-            { label: 'SL',     val: d.stop_loss,   col: C.sell },
-            { label: 'T1',     val: d.target1,     col: C.buy  },
-            { label: 'T2',     val: d.target2,     col: C.buy  },
-          ].map(({ label, val, col: c }) => val && (
-            <div key={label} className="flex flex-col items-center px-2 py-1 bg-white/5 border border-white/5 min-w-[58px]">
-              <span className="text-[9px] font-mono text-zinc-500">{label}</span>
-              <span className="text-[11px] font-mono font-bold" style={{ color: c }}>{fmtNum(val)}</span>
-            </div>
-          ))}
-          {d.risk_reward && (
-            <div className="flex flex-col items-center px-2 py-1 bg-white/5 border border-white/5 min-w-[48px]">
-              <span className="text-[9px] font-mono text-zinc-500">R:R</span>
-              <span className="text-[11px] font-mono font-bold text-white">{d.risk_reward}</span>
-            </div>
-          )}
+        {/* Buy/Sell pressure bar */}
+        <div className="flex flex-col gap-0.5 flex-1 min-w-[90px]">
+          <div className="flex justify-between text-[9px]">
+            <span className="text-[#00E676]">Buy {d.buy_pct}%</span>
+            <span className="text-[#FF3B30]">Sell {d.sell_pct}%</span>
+          </div>
+          <div className="h-2.5 bg-zinc-800 rounded-sm overflow-hidden flex">
+            <div style={{ width: `${d.buy_pct}%`, backgroundColor: C.buy }} className="h-full" />
+            <div style={{ width: `${d.sell_pct}%`, backgroundColor: C.sell }} className="h-full" />
+          </div>
+          <div className="flex justify-between text-[8px] font-mono text-zinc-600">
+            <span>Δ {d.current_delta >= 0 ? '+' : ''}{fmtK(d.current_delta)}</span>
+            <span>CVD {d.cvd_slope}</span>
+          </div>
         </div>
-      )}
 
-      {/* Buy/Sell pressure */}
-      <div className="flex flex-col gap-0.5 min-w-[80px]">
-        <div className="flex justify-between text-[9px]">
-          <span className="text-[#00E676]">Buy {d.buy_pct}%</span>
-          <span className="text-[#FF3B30]">Sell {d.sell_pct}%</span>
-        </div>
-        <div className="h-2 bg-zinc-800 rounded-sm overflow-hidden flex">
-          <div style={{ width: `${d.buy_pct}%`, backgroundColor: C.buy }} className="h-full" />
-          <div style={{ width: `${d.sell_pct}%`, backgroundColor: C.sell }} className="h-full" />
-        </div>
-        <div className="flex justify-between text-[8px] font-mono text-zinc-600">
-          <span>Δ {d.current_delta >= 0 ? '+' : ''}{fmtK(d.current_delta)}</span>
-          <span>CVD {d.cvd_slope}</span>
+        {/* Confidence */}
+        <div className="flex flex-col items-center justify-center shrink-0">
+          <span className="text-[8px] text-zinc-500 font-mono">Conf</span>
+          <span className="text-lg font-black" style={{ color: col }}>{d.confidence}%</span>
         </div>
       </div>
 
-      {/* Key levels */}
-      <div className="flex flex-col gap-0.5 text-[9px] font-mono min-w-[96px]">
-        {[
-          { label: 'POC', val: d.poc_price, col: C.poc },
-          { label: 'VAH', val: d.vah_price, col: C.vah },
-          { label: 'VAL', val: d.val_price, col: C.val },
-        ].map(({ label, val, col: c }) => (
-          <div key={label} className="flex justify-between">
-            <span style={{ color: c }}>{label}</span>
-            <span className="text-white font-bold">{fmtNum(val)}</span>
+      {/* Row 2: Entry/SL/Targets + Key Levels */}
+      <div className="flex flex-wrap gap-1.5 items-start">
+        {/* Levels pills */}
+        {d.signal_type !== 'WAIT' && [
+          { label: 'Entry', val: d.entry_price, col: '#fff' },
+          { label: 'SL',   val: d.stop_loss,   col: C.sell },
+          { label: 'T1',   val: d.target1,     col: C.buy  },
+          { label: 'T2',   val: d.target2,     col: C.buy  },
+        ].map(({ label, val, col: c }) => val && (
+          <div key={label} className="flex flex-col items-center px-2 py-1 bg-white/5 border border-white/5">
+            <span className="text-[8px] font-mono text-zinc-500">{label}</span>
+            <span className="text-[11px] font-mono font-bold" style={{ color: c }}>{fmtNum(val)}</span>
           </div>
         ))}
+        {d.risk_reward && d.signal_type !== 'WAIT' && (
+          <div className="flex flex-col items-center px-2 py-1 bg-white/5 border border-white/5">
+            <span className="text-[8px] font-mono text-zinc-500">R:R</span>
+            <span className="text-[11px] font-mono font-bold text-white">{d.risk_reward}</span>
+          </div>
+        )}
+        {/* Key levels inline */}
+        <div className="flex gap-2 ml-auto text-[9px] font-mono">
+          {[
+            { label: 'POC', val: d.poc_price, col: C.poc },
+            { label: 'VAH', val: d.vah_price, col: C.vah },
+            { label: 'VAL', val: d.val_price, col: C.val },
+          ].map(({ label, val, col: c }) => (
+            <div key={label} className="flex flex-col items-center">
+              <span style={{ color: c }} className="text-[8px]">{label}</span>
+              <span className="text-white font-bold">{fmtNum(val)}</span>
+            </div>
+          ))}
+        </div>
         {d.divergence !== 'NONE' && (
-          <span className="text-[8px] mt-0.5" style={{ color: d.divergence === 'BULLISH_DIV' ? C.buy : C.sell }}>
+          <span className="text-[8px] font-bold px-1.5 py-0.5 rounded"
+            style={{ color: d.divergence === 'BULLISH_DIV' ? C.buy : C.sell, backgroundColor: (d.divergence === 'BULLISH_DIV' ? C.buy : C.sell) + '20' }}>
             ⚡ {d.divergence === 'BULLISH_DIV' ? 'Bull Div' : 'Bear Div'}
           </span>
         )}
-      </div>
-
-      {/* Confidence */}
-      <div className="flex flex-col items-center justify-center min-w-[48px]">
-        <span className="text-[9px] text-zinc-500 font-mono">Conf</span>
-        <span className="text-xl font-black" style={{ color: col }}>{d.confidence}%</span>
       </div>
     </div>
   );
@@ -169,13 +171,8 @@ const VolumeProfile = ({ bins, poc, vah, val, height = 260 }) => {
 const FootprintView = ({ footprint }) => {
   if (!footprint?.length) return null;
   return (
-    <div className="flex flex-col">
-      <p className="text-[9px] font-bold uppercase tracking-wider text-zinc-500 mb-1 px-1">
-        Footprint (last {footprint.length} candles)
-      </p>
-      <div className="overflow-x-auto">
-        <div className="flex gap-1">
-          {footprint.map((candle, ci) => {
+    <div className="flex gap-1 min-w-max">
+      {footprint.map((candle, ci) => {
             const col = candle.bullish ? C.buy : C.sell;
             const reversedLevels = [...candle.levels].reverse();
             const maxLevVol = Math.max(...candle.levels.map(l => l.buy_vol + l.sell_vol)) || 1;
@@ -221,8 +218,6 @@ const FootprintView = ({ footprint }) => {
               </div>
             );
           })}
-        </div>
-      </div>
     </div>
   );
 };
@@ -367,19 +362,24 @@ export default function OrderFlowPanel({ stockData, selectedStock }) {
               {/* Signal Header */}
               <SignalHeader d={data} />
 
-              {/* Main content grid */}
-              <div className="p-2 grid grid-cols-1 lg:grid-cols-2 gap-2">
+              {/* Main content grid — 1 col on mobile, 2 col on lg+ */}
+              <div className="p-2 grid grid-cols-1 md:grid-cols-2 gap-2">
                 {/* Volume Profile */}
                 <VolumeProfile
                   bins={data.vp_bins}
                   poc={data.poc_price}
                   vah={data.vah_price}
                   val={data.val_price}
-                  height={240}
+                  height={220}
                 />
-                {/* Footprint */}
-                <div className="overflow-x-auto">
-                  <FootprintView footprint={data.footprint} />
+                {/* Footprint — horizontal scroll on mobile */}
+                <div className="flex flex-col">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-zinc-500 mb-1 px-1">
+                    Footprint (last {data.footprint?.length} candles)
+                  </p>
+                  <div className="overflow-x-auto -mx-1 px-1">
+                    <FootprintView footprint={data.footprint} />
+                  </div>
                 </div>
               </div>
 

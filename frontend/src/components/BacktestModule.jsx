@@ -78,20 +78,22 @@ const BacktestModule = ({ selectedStock }) => {
         </div>
       </div>
 
-      {/* Strategy Selector */}
+      {/* Strategy Selector — scrollable on mobile */}
       <div className="mb-2">
         <p className="text-[9px] text-zinc-600 mb-1 font-bold uppercase tracking-wider">Strategy</p>
-        <div className="flex flex-wrap gap-1">
-          {strategies.map(s => (
-            <button key={s.id} onClick={() => setSelectedStrategy(s.id)}
-              className={`px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-all ${
-                selectedStrategy === s.id ? 'text-black' : 'text-zinc-500 hover:text-white'
-              }`}
-              style={selectedStrategy === s.id ? { backgroundColor: s.color } : {}}
-              data-testid={`backtest-strategy-${s.id}`}>
-              {s.label}
-            </button>
-          ))}
+        <div className="overflow-x-auto scrollbar-none -mx-1 px-1">
+          <div className="flex gap-1 flex-nowrap min-w-max">
+            {strategies.map(s => (
+              <button key={s.id} onClick={() => setSelectedStrategy(s.id)}
+                className={`px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                  selectedStrategy === s.id ? 'text-black' : 'text-zinc-500 hover:text-white'
+                }`}
+                style={selectedStrategy === s.id ? { backgroundColor: s.color } : {}}
+                data-testid={`backtest-strategy-${s.id}`}>
+                {s.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -157,40 +157,40 @@ const ChartPanel = ({
 
   return (
     <div className="flex flex-col h-full" data-testid="chart-panel">
-      {/* Chart Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 bg-[#0A0A0A] shrink-0 flex-wrap gap-1">
-        <div className="flex items-center gap-2 flex-wrap">
+      {/* Chart Toolbar — scrollable row on mobile */}
+      <div className="flex items-center justify-between px-2 py-1 border-b border-white/10 bg-[#0A0A0A] shrink-0 gap-1 overflow-x-auto scrollbar-none">
+        <div className="flex items-center gap-1 flex-nowrap shrink-0">
           {/* Timeframes */}
           {timeframes.map((tf) => (
             <button
               key={tf.label}
               onClick={() => onTimeframeChange(tf)}
-              className={`px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider transition-all ${
+              className={`px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap min-w-[28px] ${
                 timeframe.label === tf.label
                   ? 'bg-white text-black'
-                  : 'text-zinc-500 hover:text-white'
+                  : 'text-zinc-500 hover:text-white active:text-white'
               }`}
               data-testid={`tf-${tf.label}`}
             >
               {tf.label}
             </button>
           ))}
-          <div className="w-px h-4 bg-white/10 mx-1" />
+          <div className="w-px h-4 bg-white/10 mx-1 shrink-0" />
           {/* Gann toggle */}
           <button
             onClick={() => setShowGannLines(!showGannLines)}
-            className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-1 ${
+            className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-1 whitespace-nowrap shrink-0 ${
               showGannLines ? 'text-[#3B82F6]' : 'text-zinc-500'
             }`}
             data-testid="gann-toggle"
           >
             <ChartLine size={12} weight="bold" />
-            GANN
+            <span className="hidden sm:inline">GANN</span>
           </button>
           {/* Log toggle */}
           <button
             onClick={() => setSemiLogScale(!semiLogScale)}
-            className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-all ${
+            className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap shrink-0 ${
               semiLogScale ? 'text-[#F5A623]' : 'text-zinc-500'
             }`}
             data-testid="log-toggle"
@@ -199,44 +199,46 @@ const ChartPanel = ({
           </button>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           {!pivotPoint && (
             <>
               <button
                 onClick={() => setSelectMode('high')}
-                className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-1 ${
+                className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-0.5 whitespace-nowrap ${
                   selectMode === 'high' ? 'bg-[#FF3B30] text-white' : 'text-zinc-500 hover:text-white'
                 }`}
                 data-testid="select-high-btn"
               >
-                <TrendUp size={12} weight="bold" /> HIGH
+                <TrendUp size={11} weight="bold" />
+                <span className="hidden xs:inline">HIGH</span>
               </button>
               <button
                 onClick={() => setSelectMode('low')}
-                className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-1 ${
+                className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-0.5 whitespace-nowrap ${
                   selectMode === 'low' ? 'bg-[#00E676] text-black' : 'text-zinc-500 hover:text-white'
                 }`}
                 data-testid="select-low-btn"
               >
-                <TrendDown size={12} weight="bold" /> LOW
+                <TrendDown size={11} weight="bold" />
+                <span className="hidden xs:inline">LOW</span>
               </button>
             </>
           )}
           {pivotPoint && (
             <>
-              <span className="text-[10px] font-mono text-zinc-400">
-                Pivot: {pivotPoint.price.toFixed(2)}
+              <span className="text-[9px] font-mono text-zinc-400 whitespace-nowrap">
+                P: {pivotPoint.price.toFixed(0)}
               </span>
               <button
                 onClick={() => setIsMovingMode(!isMovingMode)}
-                className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
                   isMovingMode ? 'bg-[#F5A623] text-black' : 'text-zinc-500 hover:text-white'
                 }`}
                 data-testid="move-pivot-btn"
               >
-                {isMovingMode ? 'MOVING' : 'MOVE'}
+                {isMovingMode ? 'MOVE' : 'MOVE'}
               </button>
-              <button onClick={handleDeleteGann} className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500 hover:text-[#FF3B30]" data-testid="clear-gann-btn">
+              <button onClick={handleDeleteGann} className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 hover:text-[#FF3B30]" data-testid="clear-gann-btn">
                 <Trash size={12} weight="bold" />
               </button>
             </>
