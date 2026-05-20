@@ -46,6 +46,7 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - **1-Day Target**: ATR-based 1D Target in all 11 strategy signals (cyan badge)
 - **QSC Search + Gann Chart**: Search bar in watchlist (filters existing + NSE yfinance live lookup), QSCChart with lightweight-charts candlestick (real OHLCV for Indian, synthetic for crypto/US), Gann Fan overlay, 5M/15M/1H/1D/1W timeframes, `/api/hybrid/chart/{symbol}` + `/api/hybrid/search` endpoints
 - **QSC Search Fix (Feb 2026)**: Added missing `@hybrid_router.get("/assets")` decorator (was 404 → empty watchlist). Enhanced `/api/hybrid/search` to always do yfinance NSE/BSE lookup for unknown alphabetic queries (PAYTM, ETERNAL, ADANIENT etc.). Auto-registers discovered Indian stocks into `_H_NON_CRYPTO` so chart works on first click. Fixed dropdown clipping by removing `overflow-hidden` from watchlist card and adding z-index 60.
+- **Mobile UX Polish (Feb 2026)**: Replaced bulky timeframe row on mobile with compact "1D ▾" toggle button (collapsible inline). Fixed layout calculation by switching from explicit `h-[calc(100vh-92px)]` to `h-screen + flex-1 min-h-0` so Order Flow panel always fits within viewport. Added `relative z-20` on Order Flow panel to prevent TradingView axis labels from overlapping the toggle bar.
 
 ## Known Issues
 - CoinGecko Rate Limits (429) - Free tier limitation, cache active

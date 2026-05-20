@@ -308,12 +308,12 @@ export default function OrderFlowPanel({ stockData, selectedStock }) {
   };
 
   return (
-    <div className="border-t border-white/10 bg-[#0A0A0A]" data-testid="orderflow-panel">
+    <div className="border-t border-white/10 bg-[#0A0A0A] shrink-0 flex flex-col relative z-20" data-testid="orderflow-panel">
 
-      {/* ── Toggle header ── */}
+      {/* ── Toggle header — always visible ── */}
       <button
         onClick={handleToggle}
-        className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/5 transition-colors group"
+        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/5 transition-colors group active:bg-white/10"
         data-testid="orderflow-toggle"
       >
         <div className="flex items-center gap-2">
@@ -321,7 +321,7 @@ export default function OrderFlowPanel({ stockData, selectedStock }) {
           <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400 group-hover:text-white transition-colors">
             Order Flow
           </span>
-          <span className="text-[8px] text-zinc-600">Footprint · VP · CVD · Delta</span>
+          <span className="text-[8px] text-zinc-600 hidden sm:inline">Footprint · VP · CVD · Delta</span>
           {data && (
             <span className="text-[8px] font-mono px-1 py-0.5 rounded"
               style={{ color: sigColor(data.signal_type), backgroundColor: sigColor(data.signal_type) + '20' }}>
@@ -332,18 +332,16 @@ export default function OrderFlowPanel({ stockData, selectedStock }) {
         <div className="flex items-center gap-2">
           {open && data && (
             <button onClick={handleRefresh}
-              className="text-[9px] font-mono text-zinc-600 hover:text-white px-1"
-              title="Refresh analysis">
-              ↻
-            </button>
+              className="text-[9px] font-mono text-zinc-600 hover:text-white px-1 py-1"
+              title="Refresh">↻</button>
           )}
-          {open ? <CaretUp size={12} className="text-zinc-500" /> : <CaretDown size={12} className="text-zinc-500" />}
+          {open ? <CaretDown size={12} className="text-zinc-500" /> : <CaretUp size={12} className="text-zinc-500" />}
         </div>
       </button>
 
-      {/* ── Panel Body ── */}
+      {/* ── Expanded content — max height so chart always has space ── */}
       {open && (
-        <div className="border-t border-white/5">
+        <div className="border-t border-white/5 overflow-y-auto" style={{ maxHeight: '55vh' }}>
           {loading && (
             <div className="flex items-center justify-center py-6 gap-2">
               <div className="w-1 h-1 bg-[#818CF8] rounded-full animate-bounce" />

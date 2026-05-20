@@ -14,6 +14,7 @@ const ChartPanel = ({
   const [showGannLines, setShowGannLines] = useState(true);
   const [lineExtension, setLineExtension] = useState(50);
   const [isMovingMode, setIsMovingMode] = useState(false);
+  const [tfOpen, setTfOpen] = useState(false);
 
   const timeframes = [
     { multiplier: 5, timespan: 'minute', label: '5M' },
@@ -82,34 +83,66 @@ const ChartPanel = ({
   };
 
   useEffect(() => {
-    if (!chartContainerRef.current) return;
-    const chart = createChart(chartContainerRef.current, {
-      width: chartContainerRef.current.clientWidth,
-      height: chartContainerRef.current.clientHeight,
-      layout: { background: { color: '#0A0A0A' }, textColor: '#52525B' },
-      grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
-      rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)', mode: semiLogScale ? 2 : 0 },
-      timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, rightOffset: 10, barSpacing: 6, minBarSpacing: 0.5 },
-      crosshair: { mode: 1 },
-      localization: { locale: 'en-US' },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
-      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
-    });
-    chartRef.current = chart;
-    const cs = chart.addCandlestickSeries({
-      upColor: '#00E676', downColor: '#FF3B30', borderVisible: false,
-      wickUpColor: '#00E676', wickDownColor: '#FF3B30',
-    });
-    candlestickSeriesRef.current = cs;
-    chart.timeScale().fitContent();
+    // Use refs so cleanup always has access to the latest instances
+    let retryTimer;
+    let chartInst = null;
+    let handleResize = null;
+    let roInst = null;
 
-    const handleResize = () => {
-      if (chartContainerRef.current && chart) {
-        chart.applyOptions({ width: chartContainerRef.current.clientWidth, height: chartContainerRef.current.clientHeight });
+    const initChart = () => {
+      if (!chartContainerRef.current) return;
+      const h = chartContainerRef.current.clientHeight;
+      if (h < 10) {
+        retryTimer = setTimeout(initChart, 40);   // retry until layout settles
+        return;
       }
+      const chart = createChart(chartContainerRef.current, {
+        width: chartContainerRef.current.clientWidth,
+        height: h,
+        layout: { background: { color: '#0A0A0A' }, textColor: '#52525B' },
+        grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
+        rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)', mode: semiLogScale ? 2 : 0 },
+        timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, rightOffset: 10, barSpacing: 6, minBarSpacing: 0.5 },
+        crosshair: { mode: 1 },
+        localization: { locale: 'en-US' },
+        handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+        handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+      });
+      chartInst = chart;
+      chartRef.current = chart;
+
+      const cs = chart.addCandlestickSeries({
+        upColor: '#00E676', downColor: '#FF3B30', borderVisible: false,
+        wickUpColor: '#00E676', wickDownColor: '#FF3B30',
+      });
+      candlestickSeriesRef.current = cs;
+      chart.timeScale().fitContent();
+
+      handleResize = () => {
+        if (chartContainerRef.current && chart) {
+          chart.applyOptions({
+            width: chartContainerRef.current.clientWidth,
+            height: chartContainerRef.current.clientHeight,
+          });
+        }
+      };
+      window.addEventListener('resize', handleResize);
+
+      // ResizeObserver — fires when container height changes (OrderFlow expand/collapse)
+      roInst = new ResizeObserver(handleResize);
+      roInst.observe(chartContainerRef.current);
     };
-    window.addEventListener('resize', handleResize);
-    return () => { window.removeEventListener('resize', handleResize); clearGannLines(); if (chart) chart.remove(); };
+
+    initChart();
+
+    // useEffect cleanup — always runs, even if chart was never created
+    return () => {
+      clearTimeout(retryTimer);
+      if (handleResize) window.removeEventListener('resize', handleResize);
+      if (roInst) roInst.disconnect();
+      clearGannLines();
+      if (chartInst) chartInst.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -160,11 +193,21 @@ const ChartPanel = ({
       {/* Chart Toolbar — scrollable row on mobile */}
       <div className="flex items-center justify-between px-2 py-1 border-b border-white/10 bg-[#0A0A0A] shrink-0 gap-1 overflow-x-auto scrollbar-none">
         <div className="flex items-center gap-1 flex-nowrap shrink-0">
-          {/* Timeframes */}
+          {/* Compact TF trigger — mobile only */}
+          <button
+            onClick={() => setTfOpen(!tfOpen)}
+            className="md:hidden px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider bg-white text-black flex items-center gap-1 shrink-0"
+            data-testid="tf-trigger"
+          >
+            {timeframe.label}
+            <span className="text-[8px]">{tfOpen ? '▴' : '▾'}</span>
+          </button>
+          {/* Timeframes — desktop always visible, mobile only when tfOpen */}
+          <div className={`${tfOpen ? 'flex' : 'hidden'} md:flex items-center gap-1 flex-nowrap shrink-0`}>
           {timeframes.map((tf) => (
             <button
               key={tf.label}
-              onClick={() => onTimeframeChange(tf)}
+              onClick={() => { onTimeframeChange(tf); setTfOpen(false); }}
               className={`px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap min-w-[28px] ${
                 timeframe.label === tf.label
                   ? 'bg-white text-black'
@@ -175,6 +218,7 @@ const ChartPanel = ({
               {tf.label}
             </button>
           ))}
+          </div>
           <div className="w-px h-4 bg-white/10 mx-1 shrink-0" />
           {/* Gann toggle */}
           <button

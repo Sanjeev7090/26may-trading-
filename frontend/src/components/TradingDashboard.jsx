@@ -218,7 +218,7 @@ const TradingDashboard = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col" data-testid="trading-dashboard">
+    <div className="h-screen overflow-hidden bg-[#0A0A0A] text-white flex flex-col" data-testid="trading-dashboard">
       <Toaster theme="dark" position="top-right" richColors />
 
       {/* HYBRID MODE OVERLAY */}
@@ -291,8 +291,8 @@ const TradingDashboard = () => {
         ))}
       </div>
 
-      {/* Main Grid — explicit height for both mobile and desktop */}
-      <div className="flex flex-col lg:grid lg:grid-cols-12 overflow-hidden h-[calc(100vh-92px)] lg:h-[calc(100vh-56px)]">
+      {/* Main Grid — flex-1 to fill remaining space */}
+      <div className="flex-1 flex flex-col lg:grid lg:grid-cols-12 overflow-hidden min-h-0">
 
         {/* Left Sidebar */}
         <aside className={`lg:col-span-3 xl:col-span-2 border-r border-white/10 flex flex-col overflow-y-auto ${mobilePanel !== 'left' ? 'hidden lg:flex' : 'flex'}`} data-testid="left-sidebar">
@@ -343,9 +343,9 @@ const TradingDashboard = () => {
         </aside>
 
         {/* Center Chart */}
-        <main className={`lg:col-span-6 xl:col-span-7 flex flex-col relative min-h-0 overflow-y-auto ${mobilePanel !== 'chart' ? 'hidden lg:flex' : 'flex'}`} data-testid="center-chart">
-          {/* Chart — h-full fills the grid cell, OrderFlow is below and scrollable */}
-          <div className="h-full shrink-0 min-h-[300px]">
+        <main className={`flex-1 lg:col-span-6 xl:col-span-7 flex flex-col relative min-h-0 overflow-hidden ${mobilePanel !== 'chart' ? 'hidden lg:flex' : 'flex'}`} data-testid="center-chart">
+          {/* Chart — flex-1 fills space above OrderFlow, minHeight ensures chart init works */}
+          <div className="flex-1 min-h-0" style={{ minHeight: '200px' }}>
             <ChartPanel
               stockData={stockData}
               loading={loading}
