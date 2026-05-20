@@ -131,3 +131,5 @@ websockets==16.0
 yarl==1.23.0
 yfinance==1.2.1
 zipp==3.23.0
+growwapi==1.5.0
+pyotp==2.9.0

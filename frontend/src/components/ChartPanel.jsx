@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart } from 'lightweight-charts';
-import { ChartLine, TrendUp, TrendDown, PencilLine, Trash } from '@phosphor-icons/react';
+import { ChartLine, TrendUp, TrendDown, PencilLine, Trash, Lightning } from '@phosphor-icons/react';
+import GrowwTradeModal from './GrowwTradeModal';
 
 const ChartPanel = ({
   stockData, loading, selectedStock, onPivotSelect, pivotPoint, gannFan,
-  semiLogScale, setSemiLogScale, timeframe, onTimeframeChange, isCrypto
+  semiLogScale, setSemiLogScale, timeframe, onTimeframeChange, isCrypto,
+  dataSource, onDataSourceChange
 }) => {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
@@ -15,6 +17,7 @@ const ChartPanel = ({
   const [lineExtension, setLineExtension] = useState(50);
   const [isMovingMode, setIsMovingMode] = useState(false);
   const [tfOpen, setTfOpen] = useState(false);
+  const [showTrade, setShowTrade] = useState(false);
 
   const timeframes = [
     { multiplier: 5, timespan: 'minute', label: '5M' },
@@ -241,6 +244,44 @@ const ChartPanel = ({
           >
             LOG
           </button>
+          {/* Data source toggle — Yahoo / Groww (Indian stocks only) */}
+          {!isCrypto && onDataSourceChange && (
+            <>
+              <div className="w-px h-4 bg-white/10 mx-1 shrink-0" />
+              <div className="flex items-center gap-0 shrink-0 border border-white/10">
+                <button
+                  onClick={() => onDataSourceChange('yahoo')}
+                  className={`px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-all ${
+                    dataSource === 'yahoo' ? 'bg-white text-black' : 'text-zinc-500 hover:text-white'
+                  }`}
+                  data-testid="src-yahoo"
+                  title="Yahoo Finance"
+                >Y</button>
+                <button
+                  onClick={() => onDataSourceChange('groww')}
+                  className={`px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-all ${
+                    dataSource === 'groww' ? 'bg-[#00E676] text-black' : 'text-zinc-500 hover:text-white'
+                  }`}
+                  data-testid="src-groww"
+                  title="Groww live data"
+                >G</button>
+              </div>
+            </>
+          )}
+          {/* Trade button (Indian stocks) — opens Groww order modal */}
+          {!isCrypto && selectedStock && (
+            <>
+              <div className="w-px h-4 bg-white/10 mx-1 shrink-0" />
+              <button
+                onClick={() => setShowTrade(true)}
+                className="px-2 py-1 text-[10px] font-black uppercase tracking-wider bg-[#00E676] text-black hover:opacity-90 active:opacity-80 flex items-center gap-1 whitespace-nowrap shrink-0"
+                data-testid="trade-btn"
+              >
+                <Lightning size={11} weight="fill" />
+                TRADE
+              </button>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
@@ -338,6 +379,15 @@ const ChartPanel = ({
         <div className="px-3 py-1 border-t border-white/10 bg-[#141414] text-[10px] font-mono text-[#F5A623] shrink-0">
           Click anywhere on chart to move pivot
         </div>
+      )}
+
+      {/* Groww Trade modal */}
+      {showTrade && selectedStock && (
+        <GrowwTradeModal
+          ticker={selectedStock.ticker}
+          currentPrice={stockData?.bars?.length ? stockData.bars[stockData.bars.length - 1].close : null}
+          onClose={() => setShowTrade(false)}
+        />
       )}
     </div>
   );

@@ -32,6 +32,7 @@ import GannQSCPanel from './GannQSCPanel';
 import RegulatoryWatchdogPanel from './RegulatoryWatchdogPanel';
 import NarrativeSwingAnalysis from './NarrativeSwingAnalysis';
 import OrderFlowPanel from './OrderFlowPanel';
+import GrowwPortfolio from './GrowwPortfolio';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -53,6 +54,7 @@ const TradingDashboard = () => {
   const [mobilePanel, setMobilePanel] = useState('chart');
   const [cryptoChartDays, setCryptoChartDays] = useState(7);
   const [showNews, setShowNews] = useState(false);
+  const [dataSource, setDataSource] = useState('yahoo'); // 'yahoo' | 'groww'
   const wsRef = useRef(null);
 
   // WebSocket connection for real-time prices
@@ -73,9 +75,33 @@ const TradingDashboard = () => {
     }
   };
 
-  const fetchStockData = async (ticker, tf) => {
+  const fetchStockData = async (ticker, tf, sourceOverride) => {
     setLoading(true);
     try {
+      const src = sourceOverride || dataSource;
+      if (src === 'groww') {
+        // Map app timeframe to Groww interval + days window
+        const intvMap = {
+          '5M':'5m','10M':'10m','15M':'15m','30M':'30m',
+          '1H':'1h','4H':'4h','1D':'1d','1W':'1w',
+          '1M':'1d','6M':'1d','1Y':'1w',
+        };
+        const daysMap = {
+          '5M':10,'10M':15,'15M':15,'30M':25,
+          '1H':60,'4H':150,'1D':120,'1W':400,
+          '1M':30,'6M':180,'1Y':365,
+        };
+        const interval = intvMap[tf.label] || '1d';
+        const days = daysMap[tf.label] || 120;
+        const groww_symbol = (ticker || '').replace('.NS','').replace('.BO','');
+        const exchange = ticker.endsWith('.BO') ? 'BSE' : 'NSE';
+        const response = await axios.get(`${API}/groww/candles/${groww_symbol}`, {
+          params: { interval, days_back: days, exchange }
+        });
+        setStockData({ ticker, bars: response.data.bars || [] });
+        toast.success(`Loaded ${tf.label} (Groww) for ${ticker}`);
+        return;
+      }
       const params = { timespan: tf.timespan, multiplier: tf.multiplier, limit: 120 };
       if (tf.days) {
         const fromDate = new Date();
@@ -207,6 +233,7 @@ const TradingDashboard = () => {
     { id: 'search', label: 'Search' },
     { id: 'crypto', label: 'Crypto', icon: CurrencyBtc },
     { id: 'watchlist', label: 'Watchlist', icon: Star },
+    { id: 'groww', label: 'Groww', icon: Lightning },
     { id: 'portfolio', label: 'Portfolio', icon: Wallet },
     { id: 'alerts', label: 'Alerts', icon: Bell },
   ];
@@ -337,6 +364,7 @@ const TradingDashboard = () => {
               <CryptoList onCryptoSelect={handleCryptoSelect} selectedCrypto={isCrypto ? selectedStock : null} />
             )}
             {leftTab === 'watchlist' && <Watchlist onStockSelect={handleStockSelect} selectedStock={selectedStock} />}
+            {leftTab === 'groww' && <GrowwPortfolio />}
             {leftTab === 'portfolio' && <PortfolioTracker selectedStock={selectedStock} />}
             {leftTab === 'alerts' && <AlertSystem selectedStock={selectedStock} />}
           </div>
@@ -358,6 +386,13 @@ const TradingDashboard = () => {
               timeframe={timeframe}
               onTimeframeChange={handleTimeframeChange}
               isCrypto={isCrypto}
+              dataSource={dataSource}
+              onDataSourceChange={(s) => {
+                setDataSource(s);
+                if (selectedStock && !isCrypto) {
+                  fetchStockData(selectedStock.ticker, timeframe, s);
+                }
+              }}
             />
           </div>
           {/* Order Flow Panel — below chart, scroll to see */}

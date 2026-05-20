@@ -47,6 +47,10 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - **QSC Search + Gann Chart**: Search bar in watchlist (filters existing + NSE yfinance live lookup), QSCChart with lightweight-charts candlestick (real OHLCV for Indian, synthetic for crypto/US), Gann Fan overlay, 5M/15M/1H/1D/1W timeframes, `/api/hybrid/chart/{symbol}` + `/api/hybrid/search` endpoints
 - **QSC Search Fix (Feb 2026)**: Added missing `@hybrid_router.get("/assets")` decorator (was 404 → empty watchlist). Enhanced `/api/hybrid/search` to always do yfinance NSE/BSE lookup for unknown alphabetic queries (PAYTM, ETERNAL, ADANIENT etc.). Auto-registers discovered Indian stocks into `_H_NON_CRYPTO` so chart works on first click. Fixed dropdown clipping by removing `overflow-hidden` from watchlist card and adding z-index 60.
 - **Mobile UX Polish (Feb 2026)**: Replaced bulky timeframe row on mobile with compact "1D ▾" toggle button (collapsible inline). Fixed layout calculation by switching from explicit `h-[calc(100vh-92px)]` to `h-screen + flex-1 min-h-0` so Order Flow panel always fits within viewport. Added `relative z-20` on Order Flow panel to prevent TradingView axis labels from overlapping the toggle bar.
+- **Groww Trade API Integration (Feb 2026)**: Full integration with Groww Trade API via official `growwapi` Python SDK.
+  - Backend: `/app/backend/groww_service.py` with auto-refreshing access token (uses API_KEY + APPROVAL_SECRET stored in backend/.env). Token lifecycle 13.8h, cached.
+  - Endpoints: `/api/groww/status`, `/candles/{symbol}`, `/ltp`, `/ohlc/{symbol}`, `/holdings`, `/positions`, `/margin`, `/orders` (GET/POST), `/orders/{id}` (DELETE).
+  - Frontend: Source toggle in ChartPanel (Y/G) — user can switch between Yahoo Finance and Groww live data per stock. New `GrowwTradeModal` for placing BUY/SELL MARKET/LIMIT/SL/SL_M orders with CNC/MIS/NRML products. New `GrowwPortfolio` left-tab showing live Holdings, Positions, Orders, and Margin (Available/Used).
 
 ## Known Issues
 - CoinGecko Rate Limits (429) - Free tier limitation, cache active

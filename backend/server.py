@@ -6923,6 +6923,106 @@ async def websocket_price_stream(websocket: WebSocket):
 
 app.include_router(api_router)
 
+# ─── Groww Trade API routes ──────────────────────────────────────────
+try:
+    import groww_service
+    groww_router = APIRouter(prefix="/api/groww")
+
+    class GrowwOrderReq(BaseModel):
+        trading_symbol: str
+        quantity: int
+        transaction_type: str   # BUY / SELL
+        order_type: str = "MARKET"  # MARKET / LIMIT / SL / SL_M
+        product: str = "CNC"
+        exchange: str = "NSE"
+        segment: str = "CASH"
+        validity: str = "DAY"
+        price: Optional[float] = None
+        trigger_price: Optional[float] = None
+        reference_id: Optional[str] = None
+
+    def _gerr(e: Exception) -> HTTPException:
+        return HTTPException(status_code=502, detail=f"Groww API error: {type(e).__name__}: {e}")
+
+    @groww_router.get("/status")
+    async def groww_status():
+        try:
+            profile = groww_service.get_profile()
+            return {"connected": True, "profile": profile}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
+
+    @groww_router.get("/candles/{symbol}")
+    async def groww_candles(symbol: str, interval: str = "1d", days_back: int = 120, exchange: str = "NSE"):
+        try:
+            bars = groww_service.get_candles(symbol, interval=interval, days_back=days_back, exchange=exchange)
+            return {"ticker": symbol.upper(), "bars": bars, "source": "groww"}
+        except Exception as e:
+            raise _gerr(e)
+
+    @groww_router.get("/ltp")
+    async def groww_ltp(symbols: str, segment: str = "CASH"):
+        try:
+            lst = [s.strip() for s in symbols.split(',') if s.strip()]
+            return groww_service.get_ltp(lst, segment=segment)
+        except Exception as e:
+            raise _gerr(e)
+
+    @groww_router.get("/ohlc/{symbol}")
+    async def groww_ohlc(symbol: str, exchange: str = "NSE", segment: str = "CASH"):
+        try:
+            key = f"{exchange.upper()}_{symbol.upper()}"
+            data = groww_service.get_ohlc([key], segment=segment)
+            return data.get(key, {})
+        except Exception as e:
+            raise _gerr(e)
+
+    @groww_router.get("/holdings")
+    async def groww_holdings():
+        try:
+            return {"holdings": groww_service.get_holdings()}
+        except Exception as e:
+            raise _gerr(e)
+
+    @groww_router.get("/positions")
+    async def groww_positions():
+        try:
+            return {"positions": groww_service.get_positions()}
+        except Exception as e:
+            raise _gerr(e)
+
+    @groww_router.get("/margin")
+    async def groww_margin():
+        try:
+            return groww_service.get_margin()
+        except Exception as e:
+            raise _gerr(e)
+
+    @groww_router.get("/orders")
+    async def groww_orders():
+        try:
+            return {"orders": groww_service.get_orders()}
+        except Exception as e:
+            raise _gerr(e)
+
+    @groww_router.post("/orders")
+    async def groww_place_order(req: GrowwOrderReq):
+        try:
+            return groww_service.place_order(**req.model_dump(exclude_none=True))
+        except Exception as e:
+            raise _gerr(e)
+
+    @groww_router.delete("/orders/{order_id}")
+    async def groww_cancel_order(order_id: str, segment: str = "CASH"):
+        try:
+            return groww_service.cancel_order(order_id, segment=segment)
+        except Exception as e:
+            raise _gerr(e)
+
+    app.include_router(groww_router)
+except Exception as _ge:
+    logging.warning(f"Groww integration not loaded: {_ge}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
