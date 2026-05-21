@@ -80,7 +80,6 @@ const TradingDashboard = () => {
     try {
       const src = sourceOverride || dataSource;
       if (src === 'groww') {
-        // Map app timeframe to Groww interval + days window
         const intvMap = {
           '5M':'5m','10M':'10m','15M':'15m','30M':'30m',
           '1H':'1h','4H':'4h','1D':'1d','1W':'1w',
@@ -93,13 +92,15 @@ const TradingDashboard = () => {
         };
         const interval = intvMap[tf.label] || '1d';
         const days = daysMap[tf.label] || 120;
-        const groww_symbol = (ticker || '').replace('.NS','').replace('.BO','');
-        const exchange = ticker.endsWith('.BO') ? 'BSE' : 'NSE';
+        const groww_symbol = selectedStock?.groww_symbol
+          || (ticker || '').replace('.NS','').replace('.BO','').replace(/^\^/,'');
+        const exchange = selectedStock?.exchange
+          || (ticker.endsWith('.BO') ? 'BSE' : 'NSE');
         const response = await axios.get(`${API}/groww/candles/${groww_symbol}`, {
           params: { interval, days_back: days, exchange }
         });
         setStockData({ ticker, bars: response.data.bars || [] });
-        toast.success(`Loaded ${tf.label} (Groww) for ${ticker}`);
+        toast.success(`Loaded ${tf.label} (Groww) for ${groww_symbol}`);
         return;
       }
       const params = { timespan: tf.timespan, multiplier: tf.multiplier, limit: 120 };

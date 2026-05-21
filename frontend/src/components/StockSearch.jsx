@@ -57,18 +57,30 @@ const StockSearch = ({ onStockSelect, selectedStock }) => {
       {searching && <p className="text-[10px] text-zinc-500 mt-2 font-mono animate-pulse">Searching...</p>}
 
       {results.length > 0 && (
-        <div className="mt-1 max-h-48 overflow-y-auto" data-testid="search-results">
-          {results.map((stock, idx) => (
-            <button
-              key={idx}
-              onClick={() => selectStock(stock)}
-              className="w-full text-left px-3 py-2 hover:bg-white/5 border-b border-white/5 transition-colors flex items-center justify-between"
-              data-testid={`search-result-${idx}`}
-            >
-              <span className="text-xs font-mono font-bold text-white">{stock.ticker}</span>
-              <span className="text-[10px] text-zinc-500 truncate ml-2">{stock.name}</span>
-            </button>
-          ))}
+        <div className="mt-1 max-h-64 overflow-y-auto" data-testid="search-results">
+          {results.map((stock, idx) => {
+            const display = stock.groww_symbol || stock.ticker;
+            const typeBadge = stock.type === 'INDEX' ? 'IDX' : (stock.exchange || 'NSE');
+            const typeColor = stock.type === 'INDEX'
+              ? 'bg-[#F5A623]/20 text-[#F5A623] border-[#F5A623]/30'
+              : (stock.exchange === 'BSE'
+                  ? 'bg-[#A855F7]/20 text-[#A855F7] border-[#A855F7]/30'
+                  : 'bg-[#00E676]/20 text-[#00E676] border-[#00E676]/30');
+            return (
+              <button
+                key={idx}
+                onClick={() => selectStock(stock)}
+                className="w-full text-left px-3 py-2 hover:bg-white/5 border-b border-white/5 transition-colors flex items-center gap-2"
+                data-testid={`search-result-${idx}`}
+              >
+                <span className={`text-[8px] font-bold px-1 py-0.5 border ${typeColor} font-mono shrink-0`}>
+                  {typeBadge}
+                </span>
+                <span className="text-xs font-mono font-bold text-white shrink-0">{display}</span>
+                <span className="text-[10px] text-zinc-500 truncate ml-auto">{stock.name}</span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

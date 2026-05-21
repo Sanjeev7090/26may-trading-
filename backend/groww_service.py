@@ -20,6 +20,10 @@ _client: Optional[GrowwAPI] = None
 _token_exp: float = 0.0          # epoch seconds when current access token expires
 _lock = threading.Lock()
 
+# Search universe cache (loaded lazily on first search)
+_universe_cache: Optional[List[Dict[str, Any]]] = None
+_universe_lock = threading.Lock()
+
 
 def _refresh_client() -> GrowwAPI:
     """Get a GrowwAPI client. Refreshes token 5 min before expiry."""
@@ -197,3 +201,120 @@ def cancel_order(order_id: str, segment: str = "CASH") -> Dict[str, Any]:
     g = client()
     seg = g.SEGMENT_FNO if segment == "FNO" else g.SEGMENT_CASH
     return g.cancel_order(groww_order_id=order_id, segment=seg)
+
+
+# ─── Search universe (cached) ───────────────────────────────────────
+# yfinance ticker maps for indices (Yahoo uses ^XXX format)
+_INDEX_YF_MAP = {
+    "NIFTY":           "^NSEI",
+    "BANKNIFTY":       "^NSEBANK",
+    "FINNIFTY":        "NIFTY_FIN_SERVICE.NS",
+    "NIFTYIT":         "^CNXIT",
+    "NIFTYAUTO":       "^CNXAUTO",
+    "NIFTYPHARMA":     "^CNXPHARMA",
+    "NIFTYMETAL":      "^CNXMETAL",
+    "NIFTYFMCG":       "^CNXFMCG",
+    "NIFTYMEDIA":      "^CNXMEDIA",
+    "NIFTYREALTY":     "^CNXREALTY",
+    "NIFTYPSUBANK":    "^CNXPSUBANK",
+    "NIFTYPVTBANK":    "NIFTY_PVT_BANK.NS",
+    "NIFTYMIDCAP":     "NIFTY_MIDCAP_100.NS",
+    "NIFTYMIDCAP150":  "NIFTY_MIDCAP_150.NS",
+    "MIDCAP50":        "NIFTY_MID_LIQ_15.NS",
+    "NIFTYSMALL":      "^CNXSC",
+    "NIFTYSMALLCAP250":"NIFTY_SMLCAP_250.NS",
+    "NIFTY100":        "^CNX100",
+    "NIFTY500":        "^CRSLDX",
+    "NIFTYJR":         "^NSEMDCP50",
+    "INDIAVIX":        "^INDIAVIX",
+    "SENSEX":          "^BSESN",
+    "BANKEX":          "BSE-BANK.BO",
+    "BSEMIDCAP":       "BSE-MIDCAP.BO",
+    "BSESMLCAP":       "BSE-SMLCAP.BO",
+    "BSE100":          "BSE-100.BO",
+}
+
+
+def _build_universe() -> List[Dict[str, Any]]:
+    """Load Groww instruments from PUBLIC CSV (no auth needed) and build a clean search universe."""
+    import pandas as pd
+    csv_url = "https://growwapi-assets.groww.in/instruments/instrument.csv"
+    try:
+        df = pd.read_csv(csv_url, low_memory=False)
+    except Exception:
+        # Fallback to authenticated SDK call
+        g = client()
+        df = g.get_all_instruments()
+
+    # Indices (NSE + BSE)
+    idx = df[df['instrument_type'] == 'IDX']
+    # NSE pure equity: series == 'EQ'
+    nse_eq = df[(df['exchange'] == 'NSE') & (df['instrument_type'] == 'EQ') & (df['series'] == 'EQ')]
+    # BSE equity: ISIN starting with INE (real equity, not bonds/MF)
+    bse_eq = df[(df['exchange'] == 'BSE') & (df['instrument_type'] == 'EQ')
+                & (df['isin'].astype(str).str.startswith('INE'))]
+
+    out: List[Dict[str, Any]] = []
+    for row in idx.itertuples():
+        sym = str(row.trading_symbol)
+        out.append({
+            "ticker":        _INDEX_YF_MAP.get(sym, sym),
+            "name":          str(row.name) if str(row.name) != 'nan' else sym,
+            "type":          "INDEX",
+            "exchange":      str(row.exchange),
+            "groww_symbol":  sym,
+            "isin":          str(row.isin) if str(row.isin) != 'nan' else "",
+        })
+    for row in nse_eq.itertuples():
+        sym = str(row.trading_symbol)
+        out.append({
+            "ticker":        f"{sym}.NS",
+            "name":          str(row.name) if str(row.name) != 'nan' else sym,
+            "type":          "STOCK",
+            "exchange":      "NSE",
+            "groww_symbol":  sym,
+            "isin":          str(row.isin),
+        })
+    for row in bse_eq.itertuples():
+        sym = str(row.trading_symbol)
+        out.append({
+            "ticker":        f"{sym}.BO",
+            "name":          str(row.name) if str(row.name) != 'nan' else sym,
+            "type":          "STOCK",
+            "exchange":      "BSE",
+            "groww_symbol":  sym,
+            "isin":          str(row.isin),
+        })
+    return out
+
+
+def get_search_universe() -> List[Dict[str, Any]]:
+    """Return cached list of searchable instruments. Loads once."""
+    global _universe_cache
+    if _universe_cache is not None:
+        return _universe_cache
+    with _universe_lock:
+        if _universe_cache is None:
+            _universe_cache = _build_universe()
+    return _universe_cache
+
+
+def search_instruments(query: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """Case-insensitive substring search over the universe. Indices first."""
+    q = (query or "").strip().upper()
+    if not q:
+        return []
+    uni = get_search_universe()
+    exact_idx, prefix_idx, contain_idx = [], [], []
+    exact_eq,  prefix_eq,  contain_eq  = [], [], []
+    for it in uni:
+        sym = it["groww_symbol"].upper()
+        name = it["name"].upper()
+        if sym == q:
+            (exact_idx if it["type"] == "INDEX" else exact_eq).append(it)
+        elif sym.startswith(q) or name.startswith(q):
+            (prefix_idx if it["type"] == "INDEX" else prefix_eq).append(it)
+        elif q in sym or q in name:
+            (contain_idx if it["type"] == "INDEX" else contain_eq).append(it)
+    combined = exact_idx + exact_eq + prefix_idx + prefix_eq + contain_idx + contain_eq
+    return combined[:limit]

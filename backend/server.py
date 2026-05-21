@@ -496,42 +496,34 @@ async def root():
 
 @api_router.get("/stock/search")
 async def search_stock(q: str = Query(..., min_length=1)):
-    """Search for stock tickers - NSE stocks"""
-    cache_key = f"search_{q}"
+    """Search Groww universe: indices (NIFTY 50, BANK NIFTY, SENSEX) + NSE/BSE equities."""
+    cache_key = f"search_{q.lower()}"
     if cache_key in cache_storage:
         cached_data, cached_time = cache_storage[cache_key]
         if (datetime.now() - cached_time).seconds < 300:
             return cached_data
-    
+
     try:
-        q_upper = q.upper()
-        
-        nse_stocks = [
-            {"ticker": "NIFTY", "name": "NIFTY 50 Index", "type": "INDEX"},
-            {"ticker": "BANKNIFTY", "name": "Bank Nifty Index", "type": "INDEX"},
-            {"ticker": "FINNIFTY", "name": "Nifty Financial Services", "type": "INDEX"},
-            {"ticker": "RELIANCE.NS", "name": "Reliance Industries Ltd", "type": "STOCK"},
-            {"ticker": "TCS.NS", "name": "Tata Consultancy Services", "type": "STOCK"},
-            {"ticker": "HDFCBANK.NS", "name": "HDFC Bank Ltd", "type": "STOCK"},
-            {"ticker": "INFY.NS", "name": "Infosys Ltd", "type": "STOCK"},
-            {"ticker": "ICICIBANK.NS", "name": "ICICI Bank Ltd", "type": "STOCK"},
-            {"ticker": "SBIN.NS", "name": "State Bank of India", "type": "STOCK"},
-            {"ticker": "BHARTIARTL.NS", "name": "Bharti Airtel Ltd", "type": "STOCK"},
-            {"ticker": "ITC.NS", "name": "ITC Ltd", "type": "STOCK"},
-            {"ticker": "KOTAKBANK.NS", "name": "Kotak Mahindra Bank", "type": "STOCK"},
-            {"ticker": "LT.NS", "name": "Larsen & Toubro Ltd", "type": "STOCK"},
-            {"ticker": "AXISBANK.NS", "name": "Axis Bank Ltd", "type": "STOCK"},
-            {"ticker": "ASIANPAINT.NS", "name": "Asian Paints Ltd", "type": "STOCK"},
-            {"ticker": "MARUTI.NS", "name": "Maruti Suzuki India Ltd", "type": "STOCK"},
-            {"ticker": "WIPRO.NS", "name": "Wipro Ltd", "type": "STOCK"},
-            {"ticker": "TATAMOTORS.NS", "name": "Tata Motors Ltd", "type": "STOCK"},
-            {"ticker": "TATASTEEL.NS", "name": "Tata Steel Ltd", "type": "STOCK"},
-            {"ticker": "ADANIENT.NS", "name": "Adani Enterprises Ltd", "type": "STOCK"},
-        ]
-        
-        results = [s for s in nse_stocks if q_upper in s["ticker"] or q_upper in s["name"].upper()]
-        
-        result = {"results": results[:10]}
+        results = []
+        # Primary: Groww search universe (indices + 12k stocks)
+        try:
+            import groww_service
+            results = groww_service.search_instruments(q, limit=25)
+        except Exception as ge:
+            logging.warning(f"Groww search unavailable: {ge}")
+
+        # Fallback: hardcoded NIFTY/BANKNIFTY/SENSEX so search always works
+        if not results:
+            q_upper = q.upper()
+            fallback = [
+                {"ticker": "^NSEI",   "groww_symbol": "NIFTY",     "name": "NIFTY 50",         "type": "INDEX", "exchange": "NSE"},
+                {"ticker": "^NSEBANK","groww_symbol": "BANKNIFTY", "name": "NIFTY Bank",       "type": "INDEX", "exchange": "NSE"},
+                {"ticker": "^BSESN",  "groww_symbol": "SENSEX",    "name": "BSE Sensex",       "type": "INDEX", "exchange": "BSE"},
+            ]
+            results = [s for s in fallback
+                       if q_upper in s["groww_symbol"] or q_upper in s["name"].upper()]
+
+        result = {"results": results[:25]}
         cache_storage[cache_key] = (result, datetime.now())
         return result
     except Exception as e:

@@ -51,6 +51,11 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
   - Backend: `/app/backend/groww_service.py` with auto-refreshing access token (uses API_KEY + APPROVAL_SECRET stored in backend/.env). Token lifecycle 13.8h, cached.
   - Endpoints: `/api/groww/status`, `/candles/{symbol}`, `/ltp`, `/ohlc/{symbol}`, `/holdings`, `/positions`, `/margin`, `/orders` (GET/POST), `/orders/{id}` (DELETE).
   - Frontend: Source toggle in ChartPanel (Y/G) — user can switch between Yahoo Finance and Groww live data per stock. New `GrowwTradeModal` for placing BUY/SELL MARKET/LIMIT/SL/SL_M orders with CNC/MIS/NRML products. New `GrowwPortfolio` left-tab showing live Holdings, Positions, Orders, and Margin (Available/Used).
+- **Full Search Universe (Feb 2026)**: Replaced hardcoded 20-stock list with full Groww instrument universe (12k+ instruments). Loaded once from PUBLIC CSV (`https://growwapi-assets.groww.in/instruments/instrument.csv`, ~24MB, no auth required) and cached in-memory.
+  - Includes: 30 indices (NIFTY 50, BANK NIFTY, SENSEX, FINNIFTY, all sector indices), 2508 NSE EQ stocks, 7226 BSE INE-prefix equities.
+  - Search prioritization: exact match → prefix match → contains; indices first within each tier.
+  - Index tickers map to yfinance equivalents (NIFTY→^NSEI, SENSEX→^BSESN, BANKNIFTY→^NSEBANK, etc.) so charts work with Yahoo source out-of-box.
+  - UI: Each result shows colored badge (orange IDX / green NSE / purple BSE) + symbol + full name.
 
 ## Known Issues
 - CoinGecko Rate Limits (429) - Free tier limitation, cache active
