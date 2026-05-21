@@ -20,6 +20,7 @@ const ChartPanel = ({
   const [showTrade, setShowTrade] = useState(false);
 
   const timeframes = [
+    { multiplier: 1, timespan: 'minute', label: '1MIN' },
     { multiplier: 5, timespan: 'minute', label: '5M' },
     { multiplier: 10, timespan: 'minute', label: '10M' },
     { multiplier: 15, timespan: 'minute', label: '15M' },

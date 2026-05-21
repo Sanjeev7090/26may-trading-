@@ -545,6 +545,7 @@ async def get_stock_bars(
         # yfinance valid intervals: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 4h, 1d, 5d, 1wk, 1mo, 3mo
         # Note: 10m is NOT supported by yfinance, so we map it to 15m (closest supported)
         interval_map = {
+            (1, "minute"): "1m",
             (10, "minute"): "15m",  # 10m not supported, use 15m instead
             (30, "minute"): "30m",
             (1, "hour"): "1h",
