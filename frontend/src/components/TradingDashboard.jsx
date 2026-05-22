@@ -174,22 +174,63 @@ const TradingDashboard = () => {
     setOptionsSheet({ symbol, name });
   };
 
+  // Fetch intraday OHLC bars for an option (NSE chart-databyindex)
+  const fetchOptionIntraday = async (option, intervalMin = 1) => {
+    setLoading(true);
+    try {
+      const expiry = option.expiry_display || option.expiry;
+      const response = await axios.get(`${API}/option/intraday`, {
+        params: {
+          underlying: option.underlying,
+          strike: option.strike,
+          option_type: option.type,
+          expiry,
+          interval_min: intervalMin,
+        },
+      });
+      setStockData({
+        ticker: response.data.ticker,
+        bars: response.data.bars || [],
+      });
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Failed to load option chart');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleOptionSelect = (option) => {
-    const indexInfo = INDEX_TICKER_MAP[option.underlying] || INDEX_TICKER_MAP.NIFTY;
-    // Set the underlying index as selectedStock so the chart loads
+    const expiryNorm = option.expiry_display || option.expiry || '';
+    // Build a synthetic stock object for the option so the chart panel knows
+    // what to render. type='OPTION' lets us guard against stock-specific flows
+    // (WS subscribe, signal/pivot, gann fan).
     const stock = {
-      ticker: indexInfo.ticker,
-      name: indexInfo.name,
-      type: 'INDEX',
-      symbol: option.underlying,
-      // Attach option meta for chart panel to render strike line (optional enhancement)
+      ticker: `OPT_${option.underlying}_${option.strike}_${option.type}_${expiryNorm}`,
+      name: option.instrument,
+      type: 'OPTION',
+      underlying: option.underlying,
+      strike: option.strike,
+      optionType: option.type,
+      expiry: expiryNorm,
+      last_price: option.last_price,
+      change_pct: option.change_pct,
       selectedOption: option,
     };
-    handleStockSelect(stock);
+    setStockData(null);
+    setPivotPoint(null);
+    setGannFan(null);
+    setSignal(null);
+    setSelectedStock(stock);
     setOptionsSheet(null);
+    const optTf = { multiplier: 1, timespan: 'minute', label: '1MIN' };
+    setTimeframe(optTf);
+    fetchOptionIntraday(option, 1);
+    setMobilePanel('chart');
     toast.success(
-      `${option.instrument} @ ₹${option.last_price} (${option.change_pct >= 0 ? '+' : ''}${option.change_pct.toFixed(2)}%)`,
-      { description: `Strike ${option.strike} · Exp ${option.expiry_display || option.expiry}` }
+      `${option.instrument} chart loaded`,
+      {
+        description: `₹${option.last_price.toFixed(2)} (${option.change_pct >= 0 ? '+' : ''}${option.change_pct.toFixed(2)}%) · Exp ${expiryNorm}`,
+      }
     );
   };
 
@@ -216,6 +257,11 @@ const TradingDashboard = () => {
         const days = daysMap[tf.label] || 7;
         setCryptoChartDays(days);
         fetchCryptoData(selectedStock.coin_id, days);
+      } else if (selectedStock.type === 'OPTION' && selectedStock.selectedOption) {
+        // Options support 1m / 5m / 15m intraday only (NSE chart-databyindex tick data)
+        const optIntervalMap = { '1MIN': 1, '5M': 5, '10M': 10, '15M': 15 };
+        const ivm = optIntervalMap[tf.label] || 1;
+        fetchOptionIntraday(selectedStock.selectedOption, ivm);
       } else {
         fetchStockData(selectedStock.ticker, tf);
       }
@@ -241,7 +287,7 @@ const TradingDashboard = () => {
   };
 
   const fetchSignal = async (pivot) => {
-    if (!selectedStock || !pivot || selectedStock.type === 'CRYPTO') return;
+    if (!selectedStock || !pivot || selectedStock.type === 'CRYPTO' || selectedStock.type === 'OPTION') return;
     try {
       const response = await axios.get(`${API}/signal/${selectedStock.ticker}`, {
         params: { pivot_price: pivot.price, pivot_timestamp: pivot.timestamp }
@@ -251,13 +297,14 @@ const TradingDashboard = () => {
   };
 
   useEffect(() => {
-    if (pivotPoint && selectedStock && selectedStock.type !== 'CRYPTO') {
+    if (pivotPoint && selectedStock && selectedStock.type !== 'CRYPTO' && selectedStock.type !== 'OPTION') {
       const interval = setInterval(() => fetchSignal(pivotPoint), 60000);
       return () => clearInterval(interval);
     }
   }, [pivotPoint, selectedStock]);
 
   const isCrypto = selectedStock?.type === 'CRYPTO';
+  const isOption = selectedStock?.type === 'OPTION';
 
   const rightTabs = [
     { id: 'scanner', label: 'SCANNER' },
@@ -311,10 +358,19 @@ const TradingDashboard = () => {
                 <img src={selectedStock.image} alt="" className="w-4 h-4 rounded-full" />
               )}
               <span className="text-[10px] md:text-xs font-mono text-[#00E676]" data-testid="selected-ticker">
-                {isCrypto ? selectedStock.symbol?.toUpperCase() : selectedStock.ticker}
+                {isCrypto
+                  ? selectedStock.symbol?.toUpperCase()
+                  : isOption
+                  ? selectedStock.name
+                  : selectedStock.ticker}
               </span>
-              <span className="hidden sm:inline text-[10px] text-zinc-500">{selectedStock.name}</span>
-              {!isCrypto && (
+              {!isOption && (
+                <span className="hidden sm:inline text-[10px] text-zinc-500">{selectedStock.name}</span>
+              )}
+              {isOption && selectedStock.expiry && (
+                <span className="hidden sm:inline text-[10px] text-zinc-500">Exp {selectedStock.expiry}</span>
+              )}
+              {!isCrypto && !isOption && (
                 <button
                   onClick={() => setShowNews(true)}
                   className="ml-1 p-1 rounded hover:bg-white/10 transition-colors"
@@ -503,7 +559,7 @@ const TradingDashboard = () => {
       </div>
 
       {/* News Popup */}
-      {showNews && selectedStock && !isCrypto && (
+      {showNews && selectedStock && !isCrypto && !isOption && (
         <StockNewsPopup
           ticker={selectedStock.ticker}
           onClose={() => setShowNews(false)}

@@ -1126,6 +1126,110 @@ async def get_top_options(
     }
 
 
+@api_router.get("/option/intraday")
+async def get_option_intraday(
+    underlying: str = Query(..., description="NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY"),
+    strike: float = Query(..., description="Strike price (e.g., 23800)"),
+    option_type: str = Query(..., pattern="^(CE|PE|ce|pe)$", description="CE or PE"),
+    expiry: str = Query(..., description="Expiry in 'DD-Mon-YYYY' format (e.g., '26-May-2026')"),
+    interval_min: int = Query(1, ge=1, le=15, description="Bar size in minutes"),
+):
+    """Intraday OHLC candles for an index option.
+
+    Uses NSE's chart-databyindex endpoint (tick data) and aggregates into
+    {interval_min}-minute OHLC bars.
+    """
+    sym = underlying.upper()
+    opt = option_type.upper()
+    if opt not in ("CE", "PE"):
+        raise HTTPException(400, "option_type must be CE or PE")
+
+    # Build NSE chart-databyindex parameter:
+    #   OPTIDX{SYMBOL}{DD-MM-YYYY}{CE|PE}{STRIKE.2f}
+    try:
+        exp_obj = datetime.strptime(expiry, "%d-%b-%Y")
+    except ValueError:
+        # Accept '26-05-2026' too
+        try:
+            exp_obj = datetime.strptime(expiry, "%d-%m-%Y")
+        except ValueError:
+            raise HTTPException(400, f"Invalid expiry format: {expiry}. Expected 'DD-Mon-YYYY'.")
+    exp_dmy = exp_obj.strftime("%d-%m-%Y")
+    expiry_display = exp_obj.strftime("%d-%b-%Y")
+    strike_str = f"{float(strike):.2f}"
+    index_param = f"OPTIDX{sym}{exp_dmy}{opt}{strike_str}"
+
+    cache_key = f"opt_intra_{index_param}_{interval_min}"
+    if cache_key in cache_storage:
+        cached_data, cached_time = cache_storage[cache_key]
+        if (datetime.now() - cached_time).seconds < 30:
+            return cached_data
+
+    s = _get_nse_session()
+    url = f"https://www.nseindia.com/api/chart-databyindex?index={index_param}"
+    try:
+        r = s.get(url, timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"NSE intraday fetch failed: {e}")
+
+    if r.status_code != 200 or len(r.content) < 100:
+        raise HTTPException(502, f"NSE returned status {r.status_code} (len={len(r.content)})")
+    try:
+        d = r.json()
+    except Exception:
+        raise HTTPException(502, "NSE returned non-JSON for option intraday")
+
+    pts = d.get("grapthData") or []
+    if not pts:
+        raise HTTPException(404, f"No intraday data for {index_param}")
+
+    # Aggregate ticks into {interval_min}-minute OHLC bars
+    bucket_sec = interval_min * 60
+    bars_dict: dict = {}
+    for tick in pts:
+        try:
+            t_ms, price = tick[0], tick[1]
+            ts = int(t_ms / 1000)
+            bucket = (ts // bucket_sec) * bucket_sec
+            price = float(price)
+            if bucket not in bars_dict:
+                bars_dict[bucket] = {
+                    "timestamp": bucket,
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "volume": 0,
+                }
+            else:
+                b = bars_dict[bucket]
+                if price > b["high"]:
+                    b["high"] = price
+                if price < b["low"]:
+                    b["low"] = price
+                b["close"] = price
+        except Exception:
+            continue
+    bars = [bars_dict[k] for k in sorted(bars_dict.keys())]
+
+    label = "Call" if opt == "CE" else "Put"
+    result = {
+        "ticker": index_param,
+        "instrument": f"{sym} {int(strike)} {label}",
+        "underlying": sym,
+        "strike": float(strike),
+        "type": opt,
+        "expiry": expiry_display,
+        "interval_min": interval_min,
+        "bars": bars,
+        "close_price": d.get("closePrice"),
+        "name": d.get("name", ""),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    cache_storage[cache_key] = (result, datetime.now())
+    return result
+
+
 @api_router.post("/gann/fan", response_model=GannFanResponse)
 async def calculate_gann_fan(request: GannFanRequest):
     """Calculate Gann Fan angles from a pivot point"""
