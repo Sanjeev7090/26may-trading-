@@ -55,7 +55,18 @@ export default function HybridDashboard({ onBack }) {
       fetchAssets(), fetchCorrelation(), fetchRegulatory(),
       fetchPositions(), fetchPortfolio(), listTrades(), listSignals(),
     ]);
-    if (a.status === "fulfilled") setAssets(a.value);
+    if (a.status === "fulfilled") {
+      setAssets(a.value);
+      // Fallback: sync REST-polled prices into livePrices so chart & ticker always have data
+      setLivePrices(prev => {
+        const merged = { ...prev };
+        (a.value || []).forEach(asset => {
+          if (!merged[asset.symbol] && asset.price) merged[asset.symbol] = asset.price;
+          else if (asset.price) merged[asset.symbol] = asset.price; // always update from REST
+        });
+        return merged;
+      });
+    }
     if (c.status === "fulfilled") setCorrelation(c.value);
     if (r.status === "fulfilled") setRegulatory(r.value);
     if (p.status === "fulfilled") setPositions(p.value);
