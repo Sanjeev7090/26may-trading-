@@ -37,7 +37,36 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - Endpoints: POST /api/pac-so/analyze
 - Integrated into Auto Scanner (11 strategies total)
 
-## Features Implemented (Feb 2026)
+## Features Implemented (May 2026)
+
+### Indices Live Ticker + Options Flow
+- **Indices Ticker Bar**: Nifty 50, SENSEX, Bank Nifty — live prices via yfinance (auto-refresh every 60s)
+- **Top Options Sheet**: Click any index pill → opens bottom sheet with top Call/Put options
+  - NIFTY & BANKNIFTY: Live NSE option chain via curl_cffi (bypasses cloud-IP blocks), sorted by volume/OI/change
+  - SENSEX: Black-Scholes indicative prices (BSE API blocked from cloud servers), clearly labeled "indicative"
+- **Index Intraday Chart**: Clicking any index pill ALSO loads its 5-min intraday chart in the main panel
+  - NIFTY → `^NSEI`, SENSEX → `^BSESN`, BANKNIFTY → `^NSEBANK` via yfinance
+- **Option Intraday Chart**: Click specific Call/Put → loads 1-min intraday chart from NSE (NIFTY/BANKNIFTY)
+  - For SENSEX options → loads SENSEX index 5-min chart as reference (BSE chart unavailable from cloud)
+- **LLM Failover**: `llm_complete()` helper — prefers user OpenAI key, falls back to Emergent LLM key
+- **QSC Engine Live Price Fix**: REST-polled asset prices now populate `livePrices` state (WebSocket fallback)
+
+## Architecture
+- **Backend**: FastAPI (Python) on port 8001
+- **Frontend**: React + Tailwind CSS + lightweight-charts on port 3000
+- **Database**: MongoDB (local)
+- **LLM**: Emergent LLM Key — Claude Sonnet 4.5 (GPT analysis), GPT-4o (MiroFish)
+- **Crypto Data**: CoinGecko API (free tier)
+- **NSE Data**: curl_cffi (Chrome impersonation) for option chains
+- **Index Data**: yfinance for price + intraday OHLCV
+
+## P1 Next Tasks
+- Multiple expiry switch for options sheet (currently defaults to nearest expiry)
+- SENSEX options live data (BSE API access — requires server with BSE IP whitelist)
+
+## P2 Backlog
+- GannQSC Panel improvements
+- More option strike ranges for SENSEX
 - Stock News Popup: Auto-appears when stock selected, 10 latest news from yfinance
 - MiroFish Strategy: GPT-4o powered 5-agent swarm with Day Target + T1/T2/T3
 - MiroFish + PAC+S&O integrated into Auto Scanner

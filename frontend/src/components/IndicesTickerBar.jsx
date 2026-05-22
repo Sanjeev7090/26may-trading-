@@ -49,7 +49,7 @@ const IndicesTickerBar = ({ onIndexClick }) => {
     >
       {indices.map((idx) => {
         const up = (idx.change || 0) >= 0;
-        const supportsOptions = idx.symbol === 'NIFTY' || idx.symbol === 'BANKNIFTY';
+        const supportsOptions = idx.symbol === 'NIFTY' || idx.symbol === 'BANKNIFTY' || idx.symbol === 'SENSEX';
         return (
           <button
             key={idx.key}

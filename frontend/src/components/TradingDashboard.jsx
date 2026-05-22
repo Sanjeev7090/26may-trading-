@@ -171,6 +171,27 @@ const TradingDashboard = () => {
   };
 
   const handleIndexClick = (symbol, name) => {
+    // Load index intraday chart in the main chart panel
+    const indexInfo = INDEX_TICKER_MAP[symbol];
+    if (indexInfo) {
+      const stockObj = {
+        ticker: indexInfo.ticker,
+        name: indexInfo.name,
+        type: 'INDEX',
+        exchange: symbol === 'SENSEX' ? 'BSE' : 'NSE',
+        groww_symbol: symbol,
+      };
+      setStockData(null);
+      setPivotPoint(null);
+      setGannFan(null);
+      setSignal(null);
+      setSelectedStock(stockObj);
+      const intradayTf = { multiplier: 5, timespan: 'minute', label: '5M' };
+      setTimeframe(intradayTf);
+      fetchStockData(indexInfo.ticker, intradayTf);
+      setMobilePanel('chart');
+    }
+    // Also open options sheet (Call/Put options)
     setOptionsSheet({ symbol, name });
   };
 
@@ -201,6 +222,32 @@ const TradingDashboard = () => {
 
   const handleOptionSelect = (option) => {
     const expiryNorm = option.expiry_display || option.expiry || '';
+    const isSensex = option.underlying === 'SENSEX' || option.is_indicative;
+
+    // SENSEX options are on BSE — no NSE intraday chart available.
+    // Load SENSEX index chart (^BSESN) as a reference chart instead.
+    if (isSensex) {
+      const sensexStock = {
+        ticker: '^BSESN',
+        name: `SENSEX (${option.instrument} reference)`,
+        type: 'INDEX',
+        exchange: 'BSE',
+        groww_symbol: 'SENSEX',
+      };
+      setStockData(null);
+      setPivotPoint(null);
+      setGannFan(null);
+      setSignal(null);
+      setSelectedStock(sensexStock);
+      const intradayTf = { multiplier: 5, timespan: 'minute', label: '5M' };
+      setTimeframe(intradayTf);
+      fetchStockData('^BSESN', intradayTf);
+      setOptionsSheet(null);
+      setMobilePanel('chart');
+      toast.info(`SENSEX 5-min chart — ${option.instrument} (indicative)`);
+      return;
+    }
+
     // Build a synthetic stock object for the option so the chart panel knows
     // what to render. type='OPTION' lets us guard against stock-specific flows
     // (WS subscribe, signal/pivot, gann fan).

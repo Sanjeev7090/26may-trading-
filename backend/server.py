@@ -1061,6 +1061,116 @@ async def get_indices_live():
     return out
 
 
+def _fetch_sensex_indicative_options(spot: float, expiry_str: str) -> list:
+    """Generate indicative SENSEX option prices using Black-Scholes.
+    Clearly marked as indicative since BSE API is not accessible from cloud servers."""
+    import math, statistics as _stats
+    from datetime import date as _date
+
+    try:
+        exp_obj = datetime.strptime(expiry_str, "%d-%b-%Y").date()
+    except Exception:
+        return []
+
+    today = _date.today()
+    T = max((exp_obj - today).days / 365.0, 1 / 365)
+    r = 0.065      # India risk-free rate ~6.5%
+    sigma = 0.15   # Typical SENSEX IV ~15%
+
+    def _norm_cdf(x):
+        return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+    def bs_price(S, K, T, r, sigma, is_call):
+        if T <= 0 or S <= 0 or K <= 0:
+            return 0.0
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        if is_call:
+            return S * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(d2)
+        else:
+            return K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+
+    # Generate strikes: ATM ± 10 in 100-point intervals
+    atm_strike = round(spot / 100) * 100
+    strikes = [atm_strike + (i * 100) for i in range(-10, 11)]
+
+    options = []
+    for k in strikes:
+        call_price = bs_price(spot, k, T, r, sigma, True)
+        put_price  = bs_price(spot, k, T, r, sigma, False)
+        moneyness  = abs(spot - k) / spot
+        # Simulate OI & volume: ATM has highest OI/vol, decreases for OTM/ITM
+        base_oi  = max(10000, int(500000 * math.exp(-10 * moneyness)))
+        base_vol = max(500,   int(50000  * math.exp(-8  * moneyness)))
+        if call_price > 0.5:
+            options.append({
+                "instrument": f"SENSEX {int(k)} CE",
+                "underlying": "SENSEX",
+                "strike": float(k),
+                "type": "CE",
+                "expiry": expiry_str,
+                "expiry_display": expiry_str,
+                "last_price": round(call_price, 2),
+                "change": 0.0,
+                "change_pct": 0.0,
+                "volume": base_vol,
+                "oi": base_oi,
+                "iv": round(sigma * 100, 1),
+                "delta": round(_norm_cdf((math.log(spot / k) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))), 2),
+                "is_indicative": True,
+            })
+        if put_price > 0.5:
+            options.append({
+                "instrument": f"SENSEX {int(k)} PE",
+                "underlying": "SENSEX",
+                "strike": float(k),
+                "type": "PE",
+                "expiry": expiry_str,
+                "expiry_display": expiry_str,
+                "last_price": round(put_price, 2),
+                "change": 0.0,
+                "change_pct": 0.0,
+                "volume": base_vol,
+                "oi": base_oi,
+                "iv": round(sigma * 100, 1),
+                "delta": round(-_norm_cdf(-(math.log(spot / k) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))), 2),
+                "is_indicative": True,
+            })
+
+    # Sort by proximity to ATM (highest volume first)
+    options.sort(key=lambda x: abs(x["strike"] - spot))
+    return options
+
+
+def _nearest_monthly_expiry_for_sensex() -> str:
+    """Return next monthly expiry (last Friday of current month) for SENSEX."""
+    from datetime import date as _date, timedelta as _td
+    today = _date.today()
+    # Try current month last Friday
+    for day in range(31, 24, -1):
+        try:
+            d = _date(today.year, today.month, day)
+            if d.weekday() == 4:  # Friday
+                if d >= today:
+                    return d.strftime("%d-%b-%Y")
+                break
+        except ValueError:
+            continue
+    # Move to next month
+    if today.month == 12:
+        next_month = _date(today.year + 1, 1, 1)
+    else:
+        next_month = _date(today.year, today.month + 1, 1)
+    for day in range(31, 24, -1):
+        try:
+            d = _date(next_month.year, next_month.month, day)
+            if d.weekday() == 4:
+                return d.strftime("%d-%b-%Y")
+        except ValueError:
+            continue
+    return (today + timedelta(days=30)).strftime("%d-%b-%Y")
+
+
 @api_router.get("/indices/top-options/{symbol}")
 async def get_top_options(
     symbol: str,
@@ -1071,9 +1181,64 @@ async def get_top_options(
 ):
     """Top traded options for an index, filterable by type and sortable by volume/oi/change.
 
-    symbol: NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY | NIFTYNXT50
+    symbol: NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY | NIFTYNXT50 | SENSEX
     """
     sym = symbol.upper()
+
+    # --- SENSEX (BSE) handled separately --- #
+    if sym == "SENSEX":
+        cache_key = f"top_opts_SENSEX_{expiry or 'auto'}"
+        if cache_key in cache_storage:
+            cached_data, cached_time = cache_storage[cache_key]
+            if (datetime.now() - cached_time).seconds < 120:
+                cached_options = cached_data
+            else:
+                cached_options = None
+        else:
+            cached_options = None
+
+        if cached_options is None:
+            import yfinance as _yf
+            try:
+                t = _yf.Ticker("^BSESN")
+                hist = t.history(period="2d", interval="1d")
+                spot = float(hist["Close"].iloc[-1]) if len(hist) > 0 else 75000.0
+            except Exception:
+                spot = 75000.0
+            expiry_str = expiry or _nearest_monthly_expiry_for_sensex()
+            options = _fetch_sensex_indicative_options(spot, expiry_str)
+            cached_options = {
+                "symbol": "SENSEX",
+                "underlying_price": round(spot, 2),
+                "nearest_expiry": expiry_str,
+                "all_expiries": [expiry_str],
+                "options": options,
+                "bse_indicative": True,
+                "note": "Indicative prices (Black-Scholes). BSE live API unavailable from cloud server.",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            cache_storage[cache_key] = (cached_options, datetime.now())
+
+        opts = list(cached_options["options"])
+        ot = option_type.lower()
+        if ot in ("call", "ce"):
+            opts = [o for o in opts if o["type"] == "CE"]
+        elif ot in ("put", "pe"):
+            opts = [o for o in opts if o["type"] == "PE"]
+        opts = opts[:limit]
+        return {
+            "symbol": cached_options["symbol"],
+            "underlying_price": cached_options["underlying_price"],
+            "nearest_expiry": cached_options["nearest_expiry"],
+            "all_expiries": cached_options.get("all_expiries", []),
+            "options": opts,
+            "bse_indicative": True,
+            "note": cached_options.get("note", ""),
+            "filter": {"option_type": ot, "sort_by": sort_by, "limit": limit},
+            "updated_at": cached_options["updated_at"],
+        }
+
+    # --- NSE indices (NIFTY, BANKNIFTY, etc.) --- #
     cache_key = f"top_opts_{sym}_{expiry or 'auto'}"
     cached_options = None
     if cache_key in cache_storage:

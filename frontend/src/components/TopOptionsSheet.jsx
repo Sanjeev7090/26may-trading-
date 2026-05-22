@@ -92,7 +92,18 @@ const TopOptionsSheet = ({ symbol, name, onClose, onOptionSelect }) => {
             </div>
           )}
 
-          {/* Filter pills */}
+        {/* Indicative data banner for SENSEX */}
+        {data?.bse_indicative && (
+          <div className="mx-4 mt-2 mb-1 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+            <span className="text-amber-400 text-[10px] mt-0.5">⚠</span>
+            <p className="text-[10px] text-amber-400/90 leading-tight">
+              <strong>Indicative prices only</strong> — BSE SENSEX option live data unavailable from server.
+              Prices shown are Black-Scholes theoretical estimates.
+            </p>
+          </div>
+        )}
+
+        {/* Filter pills */}
           <div className="flex gap-1.5">
             {[
               { id: 'all', label: 'All' },
@@ -160,6 +171,11 @@ const TopOptionsSheet = ({ symbol, name, onClose, onOptionSelect }) => {
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-bold text-white truncate">
                           {opt.instrument}
+                          {opt.is_indicative && (
+                            <span className="ml-1.5 text-[9px] text-amber-400 border border-amber-400/40 px-1 py-0.5 rounded font-normal">
+                              indicative
+                            </span>
+                          )}
                         </div>
                         <div className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate">
                           {opt.expiry_display || opt.expiry}
@@ -194,7 +210,9 @@ const TopOptionsSheet = ({ symbol, name, onClose, onOptionSelect }) => {
 
         {/* Footer */}
         <div className="px-4 py-2 border-t border-white/10 text-[9px] text-zinc-600 font-mono text-center shrink-0">
-          Live NSE option chain · refreshes every 30s
+          {data?.bse_indicative
+            ? 'Indicative (Black-Scholes) · BSE SENSEX · Chart shows index reference'
+            : 'Live NSE option chain · refreshes every 30s'}
         </div>
       </div>
     </div>
