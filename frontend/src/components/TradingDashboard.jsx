@@ -188,7 +188,7 @@ const TradingDashboard = () => {
     fetchStockData(stock.ticker, defaultTf);
     subscribeWS(stock.ticker);
     setMobilePanel('chart');
-    setShowNews(true);
+    // News popup NOT auto-opened — user can open via newspaper icon button
   };
 
   // Map index symbol → underlying chart ticker

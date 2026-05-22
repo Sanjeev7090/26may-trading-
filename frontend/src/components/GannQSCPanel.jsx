@@ -73,6 +73,7 @@ export default function GannQSCPanel({ bars, ticker }) {
   const [status, setStatus]     = useState("idle");  // idle | feeding | computing | done | error
   const [feedMs, setFeedMs]     = useState(null);
   const lastTicker              = useRef(null);
+  const lastBarsLen             = useRef(0);
 
   const run = useCallback(async (sym, barData) => {
     if (!sym || !barData?.length) return;
@@ -101,12 +102,18 @@ export default function GannQSCPanel({ bars, ticker }) {
     }
   }, []);
 
+  // Only re-run when ticker changes OR bars count changes significantly
+  // Do NOT depend on bars reference (causes blink on every re-render)
+  const barsLen = bars?.length ?? 0;
   useEffect(() => {
-    if (!ticker || !bars?.length) return;
-    if (ticker === lastTicker.current && signal?.ticker === ticker) return;
+    if (!ticker || barsLen === 0) return;
+    // Same ticker and same number of bars → already computed, skip
+    if (ticker === lastTicker.current && barsLen === lastBarsLen.current) return;
     lastTicker.current = ticker;
+    lastBarsLen.current = barsLen;
     run(ticker, bars);
-  }, [ticker, bars, run, signal]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticker, barsLen]);
 
   /* ── empty state ── */
   if (!ticker || !bars?.length) return null;
