@@ -17,7 +17,7 @@ import websockets
 import yfinance as yf
 import pandas as pd
 from nsepython import nse_optionchain_scrapper, nse_quote_ltp
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 ROOT_DIR = Path(__file__).parent
@@ -31,6 +31,84 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 cache_storage = {}
+
+
+# ---------------------------------------------------------------------------
+# Unified LLM helper
+# ---------------------------------------------------------------------------
+# Prefers a direct OpenAI call using OPENAI_API_KEY (the user's own key, no
+# Emergent budget). Falls back to LlmChat + EMERGENT_LLM_KEY only when the
+# OpenAI key is not configured. Anthropic model hints are routed to gpt-4o
+# when using the OpenAI direct path.
+_OPENAI_ASYNC_CLIENT: Optional[AsyncOpenAI] = None
+
+
+def _get_openai_async_client() -> Optional[AsyncOpenAI]:
+    global _OPENAI_ASYNC_CLIENT
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key:
+        return None
+    if _OPENAI_ASYNC_CLIENT is None:
+        _OPENAI_ASYNC_CLIENT = AsyncOpenAI(api_key=key)
+    return _OPENAI_ASYNC_CLIENT
+
+
+def _map_model(provider: str, model: str) -> str:
+    """Map (provider, model) hints to a concrete OpenAI model name."""
+    if provider == "openai":
+        return model or "gpt-4o"
+    # anthropic / claude fallbacks → use gpt-4o (most capable available)
+    if provider == "anthropic":
+        return "gpt-4o"
+    return "gpt-4o"
+
+
+async def llm_complete(
+    system_message: str,
+    user_text: str,
+    provider: str = "openai",
+    model: str = "gpt-4o",
+    session_id: Optional[str] = None,
+    temperature: float = 0.7,
+) -> Optional[str]:
+    """Run an LLM completion. Returns response text or None on failure.
+
+    Priority:
+      1) OPENAI_API_KEY (direct OpenAI) — user's own key, no budget cap
+      2) EMERGENT_LLM_KEY (via emergentintegrations LlmChat) — fallback
+    """
+    # Try direct OpenAI first
+    oa_client = _get_openai_async_client()
+    if oa_client is not None:
+        try:
+            mapped = _map_model(provider, model)
+            resp = await oa_client.chat.completions.create(
+                model=mapped,
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_text},
+                ],
+                temperature=temperature,
+            )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            logging.warning(f"OpenAI direct call failed, falling back to Emergent: {e}")
+
+    # Fallback to Emergent
+    emergent_key = os.environ.get("EMERGENT_LLM_KEY", "").strip()
+    if not emergent_key:
+        return None
+    try:
+        chat = LlmChat(
+            api_key=emergent_key,
+            session_id=session_id or f"llm-{uuid.uuid4().hex[:8]}",
+            system_message=system_message,
+        )
+        chat.with_model(provider, model)
+        return await chat.send_message(UserMessage(text=user_text))
+    except Exception as e:
+        logging.warning(f"Emergent LLM call failed: {e}")
+        return None
 
 
 class OHLCVBar(BaseModel):
@@ -4346,16 +4424,19 @@ Return ONLY valid JSON:
 {{"signal_type":"BUY/SELL/HOLD","swarm_consensus":"BULLISH/BEARISH/NEUTRAL","confidence":70,"stop_loss":"{current_price * 0.97:.2f}","day_target":"{current_price * 1.015:.2f}","targets":["{current_price * 1.03:.2f}","{current_price * 1.05:.2f}","{current_price * 1.08:.2f}"]}}"""
 
     emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-    if not emergent_key:
+    openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
+    if not emergent_key and not openai_key:
         return None
 
-    chat = LlmChat(
-        api_key=emergent_key,
+    resp = await llm_complete(
+        system_message="You are a fast trading signal scanner. Respond with valid JSON only.",
+        user_text=prompt,
+        provider="openai",
+        model="gpt-4o",
         session_id=f"mf-scan-{ticker}-{uuid.uuid4().hex[:6]}",
-        system_message="You are a fast trading signal scanner. Respond with valid JSON only."
     )
-    chat.with_model("openai", "gpt-4o")
-    resp = await chat.send_message(UserMessage(text=prompt))
+    if not resp:
+        return None
 
     cleaned = resp.strip()
     if cleaned.startswith("```"):
@@ -5035,18 +5116,19 @@ Provide a JSON response with exactly these fields:
 Return ONLY valid JSON, no markdown."""
 
         emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-        if not emergent_key:
-            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
-        
-        chat = LlmChat(
-            api_key=emergent_key,
+        openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
+        if not emergent_key and not openai_key:
+            raise HTTPException(status_code=500, detail="No LLM key configured (set OPENAI_API_KEY or EMERGENT_LLM_KEY)")
+
+        response_text = await llm_complete(
+            system_message="You are an expert NSE stock trader specializing in Gann angles, SMC, and technical analysis. Always respond with valid JSON only.",
+            user_text=prompt_text,
+            provider="anthropic",
+            model="claude-sonnet-4-5",
             session_id=f"gpt-analyze-{request.ticker}-{uuid.uuid4().hex[:8]}",
-            system_message="You are an expert NSE stock trader specializing in Gann angles, SMC, and technical analysis. Always respond with valid JSON only."
         )
-        chat.with_model("anthropic", "claude-sonnet-4-5")
-        
-        user_message = UserMessage(text=prompt_text)
-        response_text = await chat.send_message(user_message)
+        if not response_text:
+            raise HTTPException(status_code=502, detail="LLM call failed")
         
         try:
             cleaned = response_text.strip()
@@ -6514,16 +6596,19 @@ Provide a JSON response:
 Return ONLY valid JSON."""
 
         emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-        if not emergent_key:
-            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+        openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
+        if not emergent_key and not openai_key:
+            raise HTTPException(status_code=500, detail="No LLM key configured (set OPENAI_API_KEY or EMERGENT_LLM_KEY)")
 
-        chat = LlmChat(
-            api_key=emergent_key,
+        response_text = await llm_complete(
+            system_message="You are an expert crypto trader. Always respond with valid JSON only.",
+            user_text=prompt_text,
+            provider="anthropic",
+            model="claude-sonnet-4-5",
             session_id=f"crypto-analyze-{coin_id}-{uuid.uuid4().hex[:8]}",
-            system_message="You are an expert crypto trader. Always respond with valid JSON only."
         )
-        chat.with_model("anthropic", "claude-sonnet-4-5")
-        response_text = await chat.send_message(UserMessage(text=prompt_text))
+        if not response_text:
+            raise HTTPException(status_code=502, detail="LLM call failed")
 
         try:
             cleaned = response_text.strip()
@@ -6774,18 +6859,19 @@ Return ONLY valid JSON with these exact fields:
 Return ONLY valid JSON, no markdown."""
 
         emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-        if not emergent_key:
-            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+        openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
+        if not emergent_key and not openai_key:
+            raise HTTPException(status_code=500, detail="No LLM key configured (set OPENAI_API_KEY or EMERGENT_LLM_KEY)")
 
-        chat = LlmChat(
-            api_key=emergent_key,
+        response_text = await llm_complete(
+            system_message="You are MiroFish, a Swarm Intelligence Engine that simulates multiple AI trading agents to form consensus predictions. Always respond with valid JSON only.",
+            user_text=prompt_text,
+            provider="openai",
+            model="gpt-4o",
             session_id=f"mirofish-{ticker}-{uuid.uuid4().hex[:8]}",
-            system_message="You are MiroFish, a Swarm Intelligence Engine that simulates multiple AI trading agents to form consensus predictions. Always respond with valid JSON only."
         )
-        chat.with_model("openai", "gpt-4o")
-
-        user_message = UserMessage(text=prompt_text)
-        response_text = await chat.send_message(user_message)
+        if not response_text:
+            raise HTTPException(status_code=502, detail="LLM call failed")
 
         try:
             cleaned = response_text.strip()
@@ -7750,13 +7836,18 @@ async def h_generate_signal(body: dict):
     # LLM reasoning
     reasoning = f"Statistical signal: {direction} on {target} driven by anchor={anchor}."
     llm_key = os.environ.get("EMERGENT_LLM_KEY", "")
-    if llm_key:
+    openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if llm_key or openai_key:
         try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage as _UM
-            chat = LlmChat(api_key=llm_key, session_id=f"qsc-{uuid.uuid4().hex[:8]}",
-                           system_message="You are the QSC Engine, an analytical trading reasoning module. Given numerical signal data, write a precise 3-sentence rationale explaining the cascade momentum hypothesis. Use technical, neutral, quant language. NEVER recommend illegal activity. Output plain text only."
-                           ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-            reasoning = await chat.send_message(_UM(text=json.dumps(payload, default=str)))
+            result = await llm_complete(
+                system_message="You are the QSC Engine, an analytical trading reasoning module. Given numerical signal data, write a precise 3-sentence rationale explaining the cascade momentum hypothesis. Use technical, neutral, quant language. NEVER recommend illegal activity. Output plain text only.",
+                user_text=json.dumps(payload, default=str),
+                provider="anthropic",
+                model="claude-sonnet-4-5-20250929",
+                session_id=f"qsc-{uuid.uuid4().hex[:8]}",
+            )
+            if result:
+                reasoning = result
         except Exception as llm_e:
             logging.warning(f"QSC LLM error: {llm_e}")
     sig = {"id": str(uuid.uuid4()), "symbol": target, "direction": direction,
