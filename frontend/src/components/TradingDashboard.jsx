@@ -33,6 +33,8 @@ import RegulatoryWatchdogPanel from './RegulatoryWatchdogPanel';
 import NarrativeSwingAnalysis from './NarrativeSwingAnalysis';
 import OrderFlowPanel from './OrderFlowPanel';
 import GrowwPortfolio from './GrowwPortfolio';
+import IndicesTickerBar from './IndicesTickerBar';
+import TopOptionsSheet from './TopOptionsSheet';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -55,6 +57,7 @@ const TradingDashboard = () => {
   const [cryptoChartDays, setCryptoChartDays] = useState(7);
   const [showNews, setShowNews] = useState(false);
   const [dataSource, setDataSource] = useState('yahoo'); // 'yahoo' | 'groww'
+  const [optionsSheet, setOptionsSheet] = useState(null); // { symbol, name } | null
   const wsRef = useRef(null);
 
   // WebSocket connection for real-time prices
@@ -157,6 +160,37 @@ const TradingDashboard = () => {
     subscribeWS(stock.ticker);
     setMobilePanel('chart');
     setShowNews(true);
+  };
+
+  // Map index symbol → underlying chart ticker
+  const INDEX_TICKER_MAP = {
+    NIFTY: { ticker: '^NSEI', name: 'NIFTY 50' },
+    BANKNIFTY: { ticker: '^NSEBANK', name: 'BANK NIFTY' },
+    FINNIFTY: { ticker: '^CNXFIN', name: 'FIN NIFTY' },
+    SENSEX: { ticker: '^BSESN', name: 'SENSEX' },
+  };
+
+  const handleIndexClick = (symbol, name) => {
+    setOptionsSheet({ symbol, name });
+  };
+
+  const handleOptionSelect = (option) => {
+    const indexInfo = INDEX_TICKER_MAP[option.underlying] || INDEX_TICKER_MAP.NIFTY;
+    // Set the underlying index as selectedStock so the chart loads
+    const stock = {
+      ticker: indexInfo.ticker,
+      name: indexInfo.name,
+      type: 'INDEX',
+      symbol: option.underlying,
+      // Attach option meta for chart panel to render strike line (optional enhancement)
+      selectedOption: option,
+    };
+    handleStockSelect(stock);
+    setOptionsSheet(null);
+    toast.success(
+      `${option.instrument} @ ₹${option.last_price} (${option.change_pct >= 0 ? '+' : ''}${option.change_pct.toFixed(2)}%)`,
+      { description: `Strike ${option.strike} · Exp ${option.expiry_display || option.expiry}` }
+    );
   };
 
   const handleCryptoSelect = (crypto) => {
@@ -304,6 +338,9 @@ const TradingDashboard = () => {
           </button>
         </div>
       </header>
+
+      {/* Indices Live Ticker — NIFTY 50 / SENSEX / BANK NIFTY (tap → top options) */}
+      <IndicesTickerBar onIndexClick={handleIndexClick} />
 
       {/* Mobile Tab Bar — full-width 3-panel nav */}
       <div className="flex lg:hidden border-b border-white/10 shrink-0 bg-[#0D0D0D]">
@@ -470,6 +507,16 @@ const TradingDashboard = () => {
         <StockNewsPopup
           ticker={selectedStock.ticker}
           onClose={() => setShowNews(false)}
+        />
+      )}
+
+      {/* Top Options Sheet (opens when an index pill is tapped) */}
+      {optionsSheet && (
+        <TopOptionsSheet
+          symbol={optionsSheet.symbol}
+          name={optionsSheet.name}
+          onClose={() => setOptionsSheet(null)}
+          onOptionSelect={handleOptionSelect}
         />
       )}
     </>)}

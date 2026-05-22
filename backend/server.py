@@ -776,6 +776,356 @@ async def get_nse_oi(symbol: str):
         raise HTTPException(status_code=500, detail=f"NSE site slow ya data unavailable: {str(e)}")
 
 
+def _extract_option_rows(oi_data: dict, sym: str, nearest_only: bool = True):
+    """Normalize NSE option chain into a flat list of CE/PE rows.
+
+    The NSE v3 endpoint is already filtered server-side by the requested expiry,
+    so we trust whatever rows came back. The row-level `expiryDate` field is
+    typically null on v3 — the actual expiry sits inside the CE / PE leg.
+
+    Supports both response shapes:
+      A) {"records": {"data": [{"strikePrice", "CE": {...,"expiryDate":...}, "PE": {...}}], "expiryDates": [...], "underlyingValue": x}}
+      B) flat {"data": [{"strikePrice", "CE_OI", "PE_OI", ...}], ...}
+    """
+    options = []
+    underlying = 0.0
+    nearest_expiry = None
+    expiries = []
+
+    # Shape A (preferred — has lastPrice / pChange per side)
+    records = oi_data.get("records") if isinstance(oi_data, dict) else None
+    if records and isinstance(records, dict) and records.get("data"):
+        expiries = records.get("expiryDates", []) or []
+        nearest_expiry = expiries[0] if expiries else None
+        try:
+            underlying = float(records.get("underlyingValue", 0) or 0)
+        except Exception:
+            underlying = 0.0
+        for row in records.get("data", []):
+            try:
+                strike = row.get("strikePrice")
+                if strike is None:
+                    continue
+                for side, label in (("CE", "Call"), ("PE", "Put")):
+                    leg = row.get(side)
+                    if not leg:
+                        continue
+                    last_price = float(leg.get("lastPrice") or 0)
+                    volume = float(leg.get("totalTradedVolume") or 0)
+                    oi = float(leg.get("openInterest") or 0)
+                    # Skip completely dead strikes (no last price, no volume, no OI)
+                    if last_price == 0 and volume == 0 and oi == 0:
+                        continue
+                    # Compute pChange ourselves if NSE didn't provide it
+                    pchange = leg.get("pChange")
+                    if pchange is None:
+                        change_abs = float(leg.get("change") or 0)
+                        prev_close = last_price - change_abs
+                        pchange = (change_abs / prev_close * 100) if prev_close else 0
+                    # Expiry sits on the leg; fall back to records.expiryDates[0]
+                    expiry = leg.get("expiryDate") or nearest_expiry or ""
+                    options.append({
+                        "instrument": f"{sym} {int(strike)} {label}",
+                        "underlying": sym,
+                        "strike": float(strike),
+                        "type": side,
+                        "type_label": label,
+                        "expiry": expiry,
+                        "expiry_display": nearest_expiry or expiry,
+                        "last_price": last_price,
+                        "change_pct": float(pchange or 0),
+                        "change_abs": float(leg.get("change") or 0),
+                        "volume": volume,
+                        "oi": oi,
+                        "iv": float(leg.get("impliedVolatility") or 0),
+                        "trading_symbol": leg.get("identifier", "") or "",
+                    })
+            except Exception:
+                continue
+        return options, underlying, nearest_expiry, expiries
+
+    # Shape B (flat — limited fields, mostly OI/Volume)
+    flat = oi_data.get("data", []) if isinstance(oi_data, dict) else []
+    if flat:
+        for row in flat:
+            try:
+                strike = row.get("strikePrice")
+                if strike is None:
+                    continue
+                expiry = row.get("expiryDate") or ""
+                ce_ltp = row.get("CE_LTP") or row.get("CE_lastPrice") or 0
+                pe_ltp = row.get("PE_LTP") or row.get("PE_lastPrice") or 0
+                ce_chg = row.get("CE_pChange") or 0
+                pe_chg = row.get("PE_pChange") or 0
+                ce_vol = row.get("CE_volume") or 0
+                pe_vol = row.get("PE_volume") or 0
+                ce_oi = row.get("CE_OI") or 0
+                pe_oi = row.get("PE_OI") or 0
+                if ce_ltp or ce_vol or ce_oi:
+                    options.append({
+                        "instrument": f"{sym} {int(strike)} Call",
+                        "underlying": sym, "strike": float(strike), "type": "CE",
+                        "type_label": "Call", "expiry": expiry, "expiry_display": expiry,
+                        "last_price": float(ce_ltp), "change_pct": float(ce_chg), "change_abs": 0,
+                        "volume": float(ce_vol), "oi": float(ce_oi), "iv": 0,
+                        "trading_symbol": "",
+                    })
+                if pe_ltp or pe_vol or pe_oi:
+                    options.append({
+                        "instrument": f"{sym} {int(strike)} Put",
+                        "underlying": sym, "strike": float(strike), "type": "PE",
+                        "type_label": "Put", "expiry": expiry, "expiry_display": expiry,
+                        "last_price": float(pe_ltp), "change_pct": float(pe_chg), "change_abs": 0,
+                        "volume": float(pe_vol), "oi": float(pe_oi), "iv": 0,
+                        "trading_symbol": "",
+                    })
+            except Exception:
+                continue
+    return options, underlying, nearest_expiry, expiries
+
+
+# ─── NSE direct API session (chrome impersonation + cookie warmup) ──
+import time as _time
+from curl_cffi import requests as _cffi_requests
+
+_NSE_SESSION = None
+_NSE_SESSION_LAST_WARMUP = 0.0
+_NSE_EXPIRIES: Dict[str, List[str]] = {}  # symbol → [expiryDates] (refreshed every warmup)
+_NSE_SESSION_LOCK = asyncio.Lock()
+
+
+def _candidate_expiries(weeks: int = 8) -> List[str]:
+    """Compute likely expiry-date candidates (Tue/Wed/Thu) from today onward.
+
+    NSE has shuffled weekly-expiry days over time. We cover the next ~8 weeks
+    across Tuesday/Wednesday/Thursday so the first successful call seeds the
+    real expiry list.
+    """
+    today = datetime.now().date()
+    days = []
+    for d in range(0, weeks * 7 + 1):
+        dt = today + timedelta(days=d)
+        if dt.weekday() in (1, 2, 3):  # Tue=1, Wed=2, Thu=3
+            days.append(dt)
+    # Format: '26-May-2026'
+    return [dt.strftime("%d-%b-%Y") for dt in days]
+
+
+def _get_nse_session():
+    """Return a curl_cffi session with NSE cookies. Re-warmed every 30 min.
+
+    NSE's option-chain v3 only returns data when called with an explicit
+    `expiry` query param. Calls without it return 2-byte empty responses
+    once IP-throttled. We therefore probe known candidate expiries during
+    warmup so we always have at least one working expiry cached.
+    """
+    global _NSE_SESSION, _NSE_SESSION_LAST_WARMUP
+    now = _time.time()
+    if _NSE_SESSION is not None and (now - _NSE_SESSION_LAST_WARMUP) <= 1800:
+        return _NSE_SESSION
+
+    s = _cffi_requests.Session(impersonate="chrome120")
+    try:
+        s.get("https://www.nseindia.com/", timeout=10)
+        s.get("https://www.nseindia.com/get-quotes/derivatives?symbol=NIFTY", timeout=10)
+        s.get("https://www.nseindia.com/option-chain", timeout=10)
+    except Exception as e:
+        logging.warning(f"NSE session warmup failed: {e}")
+
+    # Seed expiries for major indices by probing candidate dates
+    candidates = _candidate_expiries(weeks=8)
+    for sym in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"):
+        for cand in candidates:
+            try:
+                url = (
+                    "https://www.nseindia.com/api/option-chain-v3"
+                    f"?type=Indices&symbol={sym}&expiry={cand.replace(' ', '%20')}"
+                )
+                r = s.get(url, timeout=10)
+                if r.status_code == 200 and len(r.content) > 1000:
+                    try:
+                        d = r.json()
+                    except Exception:
+                        continue
+                    exps = d.get("records", {}).get("expiryDates", []) or []
+                    if exps:
+                        _NSE_EXPIRIES[sym] = exps
+                        break  # one good expiry → full list cached, move to next symbol
+            except Exception:
+                continue
+
+    _NSE_SESSION = s
+    _NSE_SESSION_LAST_WARMUP = now
+    return s
+
+
+def _fetch_nse_option_chain(symbol: str, expiry: Optional[str] = None) -> dict:
+    """Hit NSE's v3 option-chain API. Requires explicit expiry param.
+
+    symbol: NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY | NIFTYNXT50 | <equity>
+    expiry: 'DD-Mon-YYYY' (e.g., '26-May-2026'). If omitted, uses nearest cached expiry.
+    """
+    sym = symbol.upper()
+    is_index = sym in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
+    typ = "Indices" if is_index else "Equity Derivatives"
+    s = _get_nse_session()
+
+    # Build the ordered list of expiries to try
+    tried: set = set()
+    attempts: List[str] = []
+    if expiry:
+        attempts.append(expiry)
+    attempts.extend(_NSE_EXPIRIES.get(sym, [])[:4])
+    if not attempts:
+        attempts.extend(_candidate_expiries(weeks=4)[:8])
+
+    def _try(url):
+        try:
+            r = s.get(url, timeout=15)
+            if r.status_code == 200 and len(r.content) > 200:
+                return r.json()
+        except Exception as e:
+            logging.warning(f"NSE call {url[:80]} failed: {e}")
+        return None
+
+    base = "https://www.nseindia.com/api/option-chain-v3"
+    for exp in attempts:
+        if exp in tried:
+            continue
+        tried.add(exp)
+        url = f"{base}?type={typ}&symbol={sym}&expiry={exp.replace(' ', '%20')}"
+        data = _try(url)
+        if data and data.get("records", {}).get("data"):
+            new_exps = data.get("records", {}).get("expiryDates", [])
+            if new_exps:
+                _NSE_EXPIRIES[sym] = new_exps
+            return data
+
+    # Legacy fallback
+    legacy = (
+        f"https://www.nseindia.com/api/option-chain-indices?symbol={sym}"
+        if is_index
+        else f"https://www.nseindia.com/api/option-chain-equities?symbol={sym}"
+    )
+    return _try(legacy) or {}
+
+
+# ─── Indices Live Data + Top Options ────────────────────────────────
+@api_router.get("/indices/live")
+async def get_indices_live():
+    """Live prices for NIFTY 50, SENSEX, BANK NIFTY (with % change)."""
+    indices = [
+        {"key": "NIFTY",     "name": "NIFTY 50",   "ticker": "^NSEI",    "symbol": "NIFTY"},
+        {"key": "SENSEX",    "name": "SENSEX",     "ticker": "^BSESN",   "symbol": "SENSEX"},
+        {"key": "BANKNIFTY", "name": "BANK NIFTY", "ticker": "^NSEBANK", "symbol": "BANKNIFTY"},
+    ]
+    cache_key = "indices_live"
+    if cache_key in cache_storage:
+        cached_data, cached_time = cache_storage[cache_key]
+        if (datetime.now() - cached_time).seconds < 15:
+            return cached_data
+
+    results = []
+    for idx in indices:
+        try:
+            t = yf.Ticker(idx["ticker"])
+            try:
+                info = t.fast_info
+                price = float(info.get("last_price") or info.get("lastPrice") or 0)
+                prev = float(info.get("previous_close") or info.get("previousClose") or 0)
+            except Exception:
+                hist = t.history(period="2d", interval="1d")
+                if len(hist) >= 2:
+                    price = float(hist["Close"].iloc[-1])
+                    prev = float(hist["Close"].iloc[-2])
+                elif len(hist) == 1:
+                    price = float(hist["Close"].iloc[-1])
+                    prev = float(hist["Open"].iloc[-1])
+                else:
+                    price = prev = 0.0
+            change = price - prev
+            change_pct = (change / prev * 100) if prev else 0
+            results.append({
+                **idx,
+                "price": round(price, 2),
+                "change": round(change, 2),
+                "change_pct": round(change_pct, 2),
+                "prev_close": round(prev, 2),
+            })
+        except Exception as e:
+            logging.warning(f"Index {idx['key']} fetch failed: {e}")
+            results.append({**idx, "price": 0, "change": 0, "change_pct": 0, "prev_close": 0, "error": str(e)})
+
+    out = {"indices": results, "updated_at": datetime.now(timezone.utc).isoformat()}
+    cache_storage[cache_key] = (out, datetime.now())
+    return out
+
+
+@api_router.get("/indices/top-options/{symbol}")
+async def get_top_options(
+    symbol: str,
+    limit: int = Query(15, ge=1, le=50),
+    sort_by: str = Query("volume", pattern="^(volume|oi|change|price)$"),
+    option_type: str = Query("all", pattern="^(all|call|put|CE|PE)$"),
+    expiry: Optional[str] = Query(None, description="Expiry like '28-May-2026' — defaults to nearest"),
+):
+    """Top traded options for an index, filterable by type and sortable by volume/oi/change.
+
+    symbol: NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY | NIFTYNXT50
+    """
+    sym = symbol.upper()
+    cache_key = f"top_opts_{sym}_{expiry or 'auto'}"
+    cached_options = None
+    if cache_key in cache_storage:
+        cached_data, cached_time = cache_storage[cache_key]
+        if (datetime.now() - cached_time).seconds < 60:
+            cached_options = cached_data
+
+    if cached_options is None:
+        try:
+            oi_data = _fetch_nse_option_chain(sym, expiry=expiry)
+        except Exception as e:
+            logging.error(f"Option chain fetch for {sym} failed: {e}")
+            raise HTTPException(status_code=502, detail=f"NSE option chain unavailable: {str(e)}")
+
+        if not oi_data or not oi_data.get("records", {}).get("data"):
+            raise HTTPException(status_code=502, detail=f"NSE returned empty option chain for {sym}")
+
+        options, underlying, nearest_expiry, expiries = _extract_option_rows(oi_data, sym, nearest_only=True)
+        cached_options = {
+            "symbol": sym,
+            "underlying_price": underlying,
+            "nearest_expiry": nearest_expiry,
+            "all_expiries": expiries,
+            "options": options,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        cache_storage[cache_key] = (cached_options, datetime.now())
+
+    # Apply filter + sort + limit (cheap operations, do per-request)
+    opts = list(cached_options["options"])
+    ot = option_type.lower()
+    if ot in ("call", "ce"):
+        opts = [o for o in opts if o["type"] == "CE"]
+    elif ot in ("put", "pe"):
+        opts = [o for o in opts if o["type"] == "PE"]
+
+    sort_key_map = {"volume": "volume", "oi": "oi", "price": "last_price", "change": "change_pct"}
+    sk = sort_key_map.get(sort_by, "volume")
+    opts.sort(key=lambda x: abs(x.get(sk, 0)) if sk == "change_pct" else x.get(sk, 0), reverse=True)
+    opts = opts[:limit]
+
+    return {
+        "symbol": cached_options["symbol"],
+        "underlying_price": cached_options["underlying_price"],
+        "nearest_expiry": cached_options["nearest_expiry"],
+        "all_expiries": cached_options.get("all_expiries", []),
+        "options": opts,
+        "filter": {"option_type": ot, "sort_by": sort_by, "limit": limit},
+        "updated_at": cached_options["updated_at"],
+    }
+
+
 @api_router.post("/gann/fan", response_model=GannFanResponse)
 async def calculate_gann_fan(request: GannFanRequest):
     """Calculate Gann Fan angles from a pivot point"""
