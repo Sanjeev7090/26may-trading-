@@ -40,6 +40,41 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 ## Features Implemented (May 2026)
 
 ### Indices Live Ticker + Options Flow
+- **Indices Ticker Bar**: Nifty 50, SENSEX, Bank Nifty — live prices, Groww OHLC primary, yfinance fallback
+- **Top Options Sheet**: Click any index pill → opens bottom sheet with top Call/Put options
+  - NIFTY & BANKNIFTY: Live NSE option chain via curl_cffi (bypasses cloud-IP blocks), sorted by volume/OI/change
+  - SENSEX: Black-Scholes indicative prices (BSE API blocked from cloud servers), clearly labeled "indicative"
+- **Index Intraday Chart**: Clicking any index pill ALSO loads its 5-min intraday chart in the main panel
+- **Option Intraday Chart**: Click specific Call/Put → loads 1-min intraday chart from NSE (NIFTY/BANKNIFTY)
+  - For SENSEX options → loads SENSEX index 5-min chart as reference
+- **LLM Failover**: `llm_complete()` helper — prefers user OpenAI key, falls back to Emergent LLM key
+- **QSC Engine Live Price Fix**: REST-polled asset prices now populate `livePrices` state (WebSocket fallback)
+
+### Groww Integration (May 2026)
+- **Groww as Primary Data Source**: Default data source changed to 'groww'
+- **yfinance Fallback**: Automatic silent fallback to yfinance when Groww fails (IP restriction on cloud server)
+- **Proper Symbol Mapping**: YF_TO_GROWW map in frontend (^NSEI→NIFTY, ^BSESN→SENSEX, ^NSEBANK→BANKNIFTY)
+- **No Error Toasts**: Groww 400 errors are logged in backend only, user sees seamless data
+- **Options Skip**: Options always use NSE intraday data (Groww doesn't support option chains)
+- **groww_candles Fallback**: Backend endpoint catches Groww errors, returns yfinance data transparently
+
+## Architecture
+- **Backend**: FastAPI (Python) on port 8001
+- **Frontend**: React + Tailwind CSS + lightweight-charts on port 3000
+- **Database**: MongoDB (local)
+- **LLM**: Emergent LLM Key — Claude Sonnet 4.5 (GPT analysis), GPT-4o (MiroFish)
+- **Crypto Data**: CoinGecko API (free tier)
+- **NSE Data**: curl_cffi (Chrome impersonation) for option chains
+- **Index Data**: yfinance for price + intraday OHLCV (Groww primary where available)
+
+## P1 Next Tasks
+- SENSEX options live data (BSE API access — cloud server IP needs BSE whitelist)
+- Multiple expiry switch for options sheet
+
+## P2 Backlog
+- GannQSC Panel improvements
+
+### Indices Live Ticker + Options Flow
 - **Indices Ticker Bar**: Nifty 50, SENSEX, Bank Nifty — live prices via yfinance (auto-refresh every 60s)
 - **Top Options Sheet**: Click any index pill → opens bottom sheet with top Call/Put options
   - NIFTY & BANKNIFTY: Live NSE option chain via curl_cffi (bypasses cloud-IP blocks), sorted by volume/OI/change

@@ -1013,11 +1013,13 @@ def _fetch_nse_option_chain(symbol: str, expiry: Optional[str] = None) -> dict:
 # ─── Indices Live Data + Top Options ────────────────────────────────
 @api_router.get("/indices/live")
 async def get_indices_live():
-    """Live prices for NIFTY 50, SENSEX, BANK NIFTY (with % change)."""
+    """Live prices for NIFTY 50, SENSEX, BANK NIFTY.
+    Primary: Groww OHLC (real-time). Fallback: yfinance.
+    """
     indices = [
-        {"key": "NIFTY",     "name": "NIFTY 50",   "ticker": "^NSEI",    "symbol": "NIFTY"},
-        {"key": "SENSEX",    "name": "SENSEX",     "ticker": "^BSESN",   "symbol": "SENSEX"},
-        {"key": "BANKNIFTY", "name": "BANK NIFTY", "ticker": "^NSEBANK", "symbol": "BANKNIFTY"},
+        {"key": "NIFTY",     "name": "NIFTY 50",   "ticker": "^NSEI",    "symbol": "NIFTY",     "groww_sym": "NIFTY",     "groww_exch": "NSE"},
+        {"key": "SENSEX",    "name": "SENSEX",     "ticker": "^BSESN",   "symbol": "SENSEX",    "groww_sym": "SENSEX",    "groww_exch": "BSE"},
+        {"key": "BANKNIFTY", "name": "BANK NIFTY", "ticker": "^NSEBANK", "symbol": "BANKNIFTY", "groww_sym": "BANKNIFTY", "groww_exch": "NSE"},
     ]
     cache_key = "indices_live"
     if cache_key in cache_storage:
@@ -1025,36 +1027,66 @@ async def get_indices_live():
         if (datetime.now() - cached_time).seconds < 15:
             return cached_data
 
+    # Try Groww OHLC for live prices (real-time)
+    groww_prices = {}
+    try:
+        import groww_service as _gs
+        for idx in indices:
+            try:
+                key = f"{idx['groww_exch']}_{idx['groww_sym']}"
+                ohlc_data = _gs.get_ohlc([key], segment="CASH")
+                ohlc = ohlc_data.get(key, {})
+                if ohlc and ohlc.get("last_price", 0) > 0:
+                    groww_prices[idx["key"]] = {
+                        "price": float(ohlc.get("last_price", 0)),
+                        "prev":  float(ohlc.get("close", 0) or ohlc.get("last_price", 0)),
+                        "source": "groww",
+                    }
+            except Exception as eg:
+                logging.debug(f"Groww OHLC for {idx['key']}: {eg}")
+    except Exception as eg_outer:
+        logging.debug(f"Groww not available for indices live: {eg_outer}")
+
     results = []
     for idx in indices:
         try:
-            t = yf.Ticker(idx["ticker"])
-            try:
-                info = t.fast_info
-                price = float(info.get("last_price") or info.get("lastPrice") or 0)
-                prev = float(info.get("previous_close") or info.get("previousClose") or 0)
-            except Exception:
-                hist = t.history(period="2d", interval="1d")
-                if len(hist) >= 2:
-                    price = float(hist["Close"].iloc[-1])
-                    prev = float(hist["Close"].iloc[-2])
-                elif len(hist) == 1:
-                    price = float(hist["Close"].iloc[-1])
-                    prev = float(hist["Open"].iloc[-1])
-                else:
-                    price = prev = 0.0
+            gp = groww_prices.get(idx["key"])
+            if gp and gp["price"] > 0:
+                price = gp["price"]
+                prev  = gp["prev"] or price
+                data_src = "groww"
+            else:
+                # Fallback: yfinance
+                t = yf.Ticker(idx["ticker"])
+                try:
+                    info = t.fast_info
+                    price = float(info.get("last_price") or info.get("lastPrice") or 0)
+                    prev = float(info.get("previous_close") or info.get("previousClose") or 0)
+                except Exception:
+                    hist = t.history(period="2d", interval="1d")
+                    if len(hist) >= 2:
+                        price = float(hist["Close"].iloc[-1])
+                        prev = float(hist["Close"].iloc[-2])
+                    elif len(hist) == 1:
+                        price = float(hist["Close"].iloc[-1])
+                        prev = float(hist["Open"].iloc[-1])
+                    else:
+                        price = prev = 0.0
+                data_src = "yfinance"
             change = price - prev
             change_pct = (change / prev * 100) if prev else 0
             results.append({
-                **idx,
+                **{k: v for k, v in idx.items() if k not in ("groww_sym", "groww_exch")},
                 "price": round(price, 2),
                 "change": round(change, 2),
                 "change_pct": round(change_pct, 2),
                 "prev_close": round(prev, 2),
+                "data_source": data_src,
             })
         except Exception as e:
             logging.warning(f"Index {idx['key']} fetch failed: {e}")
-            results.append({**idx, "price": 0, "change": 0, "change_pct": 0, "prev_close": 0, "error": str(e)})
+            results.append({**{k: v for k, v in idx.items() if k not in ("groww_sym", "groww_exch")},
+                            "price": 0, "change": 0, "change_pct": 0, "prev_close": 0, "error": str(e)})
 
     out = {"indices": results, "updated_at": datetime.now(timezone.utc).isoformat()}
     cache_storage[cache_key] = (out, datetime.now())
@@ -7650,13 +7682,66 @@ try:
         except Exception as e:
             return {"connected": False, "error": str(e)}
 
+    # yfinance ticker fallback map for Groww symbols
+    _GROWW_TO_YF = {
+        'NIFTY': '^NSEI', 'BANKNIFTY': '^NSEBANK', 'SENSEX': '^BSESN',
+        'FINNIFTY': '^CNXFIN', 'MIDCPNIFTY': 'NIFTY_MIDCAP_100.NS',
+        'NIFTYIT': '^CNXIT', 'NIFTYAUTO': '^CNXAUTO', 'INDIAVIX': '^INDIAVIX',
+        'NIFTYPHARMA': '^CNXPHARMA', 'NIFTYMETAL': '^CNXMETAL',
+    }
+
+    def _groww_candles_fallback_yf(symbol: str, interval: str, days_back: int, exchange: str):
+        """yfinance fallback for groww_candles when Groww API fails."""
+        sym_up = symbol.upper()
+        exch_up = exchange.upper()
+        yf_ticker = _GROWW_TO_YF.get(sym_up)
+        if not yf_ticker:
+            yf_ticker = f"{sym_up}.NS" if exch_up == "NSE" else f"{sym_up}.BO"
+        interval_map = {
+            "1m": "1m", "5m": "5m", "10m": "15m", "15m": "15m",
+            "30m": "30m", "60m": "1h", "1h": "1h", "4h": "4h",
+            "1440m": "1d", "1d": "1d", "1w": "1wk", "10080m": "1wk",
+        }
+        yf_interval = interval_map.get(interval.lower(), "1d")
+        # Use days_back to determine period (respect yfinance limits)
+        intraday = yf_interval not in ("1d", "1wk")
+        if yf_interval == "1m":
+            period = f"{min(days_back, 7)}d"
+        elif intraday:
+            period = f"{min(days_back, 60)}d"
+        else:
+            period = f"{days_back}d" if days_back < 365 else "max"
+        import yfinance as _yf
+        t = _yf.Ticker(yf_ticker)
+        hist = t.history(period=period, interval=yf_interval)
+        bars = []
+        for idx_ts, row in hist.iterrows():
+            bars.append({
+                "timestamp": int(idx_ts.timestamp() * 1000),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": float(row.get("Volume", 0)),
+            })
+        return bars
+
     @groww_router.get("/candles/{symbol}")
     async def groww_candles(symbol: str, interval: str = "1d", days_back: int = 120, exchange: str = "NSE"):
+        sym = symbol.upper()
+        # Try Groww first
         try:
-            bars = groww_service.get_candles(symbol, interval=interval, days_back=days_back, exchange=exchange)
-            return {"ticker": symbol.upper(), "bars": bars, "source": "groww"}
+            bars = groww_service.get_candles(sym, interval=interval, days_back=days_back, exchange=exchange)
+            if bars:
+                return {"ticker": sym, "bars": bars, "source": "groww"}
         except Exception as e:
-            raise _gerr(e)
+            logging.warning(f"Groww candles failed for {sym}: {e}, falling back to yfinance")
+        # Fallback to yfinance
+        try:
+            bars = _groww_candles_fallback_yf(sym, interval, days_back, exchange)
+            return {"ticker": sym, "bars": bars, "source": "yfinance_fallback"}
+        except Exception as e2:
+            raise HTTPException(502, f"Groww API error: Both Groww and yfinance failed for {sym}: {e2}")
 
     @groww_router.get("/ltp")
     async def groww_ltp(symbols: str, segment: str = "CASH"):

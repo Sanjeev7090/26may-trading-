@@ -41,6 +41,17 @@ import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspape
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Map yfinance tickers → Groww trading symbols (avoids stale-state issue)
+const YF_TO_GROWW = {
+  '^NSEI':    { symbol: 'NIFTY',     exchange: 'NSE' },
+  '^NSEBANK': { symbol: 'BANKNIFTY', exchange: 'NSE' },
+  '^BSESN':   { symbol: 'SENSEX',    exchange: 'BSE' },
+  '^CNXFIN':  { symbol: 'FINNIFTY',  exchange: 'NSE' },
+  '^CNXIT':   { symbol: 'NIFTYIT',   exchange: 'NSE' },
+  '^CNXAUTO': { symbol: 'NIFTYAUTO', exchange: 'NSE' },
+  '^INDIAVIX':{ symbol: 'INDIAVIX',  exchange: 'NSE' },
+};
+
 const TradingDashboard = () => {
   const [hybridMode, setHybridMode] = useState(false);
   const [selectedStock, setSelectedStock] = useState(null);
@@ -56,7 +67,7 @@ const TradingDashboard = () => {
   const [mobilePanel, setMobilePanel] = useState('chart');
   const [cryptoChartDays, setCryptoChartDays] = useState(7);
   const [showNews, setShowNews] = useState(false);
-  const [dataSource, setDataSource] = useState('yahoo'); // 'yahoo' | 'groww'
+  const [dataSource, setDataSource] = useState('groww'); // 'yahoo' | 'groww'
   const [optionsSheet, setOptionsSheet] = useState(null); // { symbol, name } | null
   const wsRef = useRef(null);
 
@@ -83,6 +94,11 @@ const TradingDashboard = () => {
     try {
       const src = sourceOverride || dataSource;
       if (src === 'groww') {
+        // Skip Groww for options — option intraday is always from NSE
+        if (ticker?.startsWith('OPT_')) {
+          setLoading(false);
+          return;
+        }
         const intvMap = {
           '1MIN':'1m',
           '5M':'5m','10M':'10m','15M':'15m','30M':'30m',
@@ -97,15 +113,28 @@ const TradingDashboard = () => {
         };
         const interval = intvMap[tf.label] || '1d';
         const days = daysMap[tf.label] || 120;
-        const groww_symbol = selectedStock?.groww_symbol
+        // Use ticker-based mapping first (avoids stale React state issue for indices)
+        const growwMap = YF_TO_GROWW[ticker];
+        const groww_symbol = growwMap?.symbol
+          || selectedStock?.groww_symbol
           || (ticker || '').replace('.NS','').replace('.BO','').replace(/^\^/,'');
-        const exchange = selectedStock?.exchange
+        const exchange = growwMap?.exchange
+          || selectedStock?.exchange
           || (ticker.endsWith('.BO') ? 'BSE' : 'NSE');
-        const response = await axios.get(`${API}/groww/candles/${groww_symbol}`, {
-          params: { interval, days_back: days, exchange }
-        });
-        setStockData({ ticker, bars: response.data.bars || [] });
-        toast.success(`Loaded ${tf.label} (Groww) for ${groww_symbol}`);
+        try {
+          const response = await axios.get(`${API}/groww/candles/${groww_symbol}`, {
+            params: { interval, days_back: days, exchange }
+          });
+          setStockData({ ticker, bars: response.data.bars || [] });
+          const src_label = response.data.source === 'yfinance_fallback' ? 'yfinance' : 'Groww';
+          toast.success(`Loaded ${tf.label} (${src_label}) for ${groww_symbol}`);
+        } catch (growwErr) {
+          // Groww failed → silent fallback to yfinance
+          const params = { timespan: tf.timespan, multiplier: tf.multiplier, limit: 120 };
+          const response = await axios.get(`${API}/stock/bars/${ticker}`, { params });
+          setStockData(response.data);
+          toast.success(`Loaded ${tf.label} (yfinance) for ${ticker}`);
+        }
         return;
       }
       const params = { timespan: tf.timespan, multiplier: tf.multiplier, limit: 120 };
