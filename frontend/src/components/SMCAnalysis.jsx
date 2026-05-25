@@ -29,7 +29,7 @@ const PhaseCard = ({ phase }) => {
   );
 };
 
-const SMCAnalysis = ({ stockData, selectedStock }) => {
+const SMCAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 

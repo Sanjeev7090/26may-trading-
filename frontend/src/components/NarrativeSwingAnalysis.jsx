@@ -66,7 +66,7 @@ const MetricBar = ({ label, value, min, max, color }) => {
   );
 };
 
-const NarrativeSwingAnalysis = ({ stockData, selectedStock }) => {
+const NarrativeSwingAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [enabled, setEnabled] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -82,6 +82,7 @@ const NarrativeSwingAnalysis = ({ stockData, selectedStock }) => {
         sell_threshold: -0.15
       });
       setAnalysis(response.data);
+      if (onAnalysisComplete) onAnalysisComplete('narrative_swing', response.data);
       toast.success('Narrative Swing analysis complete!');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Narrative Swing analysis failed');
@@ -95,6 +96,7 @@ const NarrativeSwingAnalysis = ({ stockData, selectedStock }) => {
     setEnabled(next);
     if (next && stockData) analyze();
     else setAnalysis(null);
+      if (onAnalysisComplete) onAnalysisComplete(null, null);
   };
 
   const a = analysis;

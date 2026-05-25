@@ -9,7 +9,7 @@ const API = `${BACKEND_URL}/api`;
 
 const signalColor = (sig) => sig === 'BUY' ? '#00E676' : sig === 'SELL' ? '#FF3B30' : '#52525B';
 
-const DemonAnalysis = ({ stockData, selectedStock }) => {
+const DemonAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [enabled, setEnabled] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -22,6 +22,7 @@ const DemonAnalysis = ({ stockData, selectedStock }) => {
         ticker: selectedStock.ticker, bars: stockData.bars
       });
       setAnalysis(response.data);
+      if (onAnalysisComplete) onAnalysisComplete('demon', response.data);
       toast.success('DEMON analysis complete!');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Analysis failed');
@@ -35,6 +36,7 @@ const DemonAnalysis = ({ stockData, selectedStock }) => {
     setEnabled(next);
     if (next && stockData) analyze();
     else setAnalysis(null);
+      if (onAnalysisComplete) onAnalysisComplete(null, null);
   };
 
   const getVerdictColor = (v) => {

@@ -7,7 +7,7 @@ import SignalIndicator from './SignalIndicator';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const ReversePriceSwings = ({ stockData, selectedStock }) => {
+const ReversePriceSwings = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [activeMethod, setActiveMethod] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -20,6 +20,7 @@ const ReversePriceSwings = ({ stockData, selectedStock }) => {
         ticker: selectedStock.ticker, bars: stockData.bars, force_method: method
       });
       setAnalysis(response.data);
+      if (onAnalysisComplete) onAnalysisComplete('reverse_swings', response.data);
       toast.success(`Method ${method} analysis complete!`);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Analysis failed');

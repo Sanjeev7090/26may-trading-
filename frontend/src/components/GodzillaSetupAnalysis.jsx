@@ -7,7 +7,7 @@ import SignalIndicator from './SignalIndicator';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const GodzillaSetupAnalysis = ({ stockData, selectedStock }) => {
+const GodzillaSetupAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [enabled, setEnabled] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -20,6 +20,7 @@ const GodzillaSetupAnalysis = ({ stockData, selectedStock }) => {
         ticker: selectedStock.ticker, bars: stockData.bars
       });
       setAnalysis(response.data);
+      if (onAnalysisComplete) onAnalysisComplete('godzilla', response.data);
       toast.success('Godzilla Setup analysis complete!');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Analysis failed');
@@ -33,6 +34,7 @@ const GodzillaSetupAnalysis = ({ stockData, selectedStock }) => {
     setEnabled(next);
     if (next && stockData) analyze();
     else setAnalysis(null);
+      if (onAnalysisComplete) onAnalysisComplete(null, null);
   };
 
   return (

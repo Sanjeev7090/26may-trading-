@@ -29,7 +29,7 @@ const StepCard = ({ step }) => {
   );
 };
 
-const AMDSAnalysis = ({ stockData, selectedStock }) => {
+const AMDSAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 

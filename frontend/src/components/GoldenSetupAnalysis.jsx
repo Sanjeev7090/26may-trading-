@@ -7,7 +7,7 @@ import SignalIndicator from './SignalIndicator';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const GoldenSetupAnalysis = ({ stockData, selectedStock }) => {
+const GoldenSetupAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [enabled, setEnabled] = useState(false);
   const [proMode, setProMode] = useState(false);
   const [mtfEnabled, setMtfEnabled] = useState(false);
@@ -22,6 +22,7 @@ const GoldenSetupAnalysis = ({ stockData, selectedStock }) => {
         ticker: selectedStock.ticker, bars: stockData.bars, pro_mode: isPro, multi_timeframe: mtf || mtfEnabled
       });
       setAnalysis(response.data);
+      if (onAnalysisComplete) onAnalysisComplete('golden_setup', response.data);
       toast.success(`Golden Setup ${isPro ? 'Pro' : 'Normal'} complete!`);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Analysis failed');
@@ -35,6 +36,7 @@ const GoldenSetupAnalysis = ({ stockData, selectedStock }) => {
     setEnabled(next);
     if (next && stockData) analyze(proMode);
     else setAnalysis(null);
+      if (onAnalysisComplete) onAnalysisComplete(null, null);
   };
 
   const handleProToggle = () => {
