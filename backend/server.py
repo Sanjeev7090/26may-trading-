@@ -5155,6 +5155,29 @@ Return ONLY valid JSON:
 @api_router.get("/auto-scan/{ticker}")
 async def auto_scan_ticker(ticker: str):
     """Auto-scan a ticker with ALL strategies and return active signals."""
+    
+    # Helper to sanitize float values for JSON
+    def json_safe_float(value, default=0.0):
+        """Convert value to JSON-safe float (no NaN/Infinity)"""
+        try:
+            f = float(value)
+            if math.isnan(f) or math.isinf(f):
+                return default
+            return round(f, 2)
+        except (TypeError, ValueError):
+            return default
+    
+    def sanitize_response(obj):
+        """Recursively sanitize all floats in response"""
+        if isinstance(obj, dict):
+            return {k: sanitize_response(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize_response(item) for item in obj]
+        elif isinstance(obj, float):
+            return json_safe_float(obj)
+        else:
+            return obj
+    
     try:
         is_crypto = ticker.lower() in CRYPTO_IDS
 
@@ -5188,18 +5211,23 @@ async def auto_scan_ticker(ticker: str):
         # ---- 1-Day Target Helper ----
         def calc_day_target(direction: str) -> float:
             """ATR-based 1-day price target for any bar interval."""
-            recent = bars[-min(10, len(bars)):]
-            if len(recent) < 2:
-                avg_range = current * 0.015
-            else:
-                ranges = [b['high'] - b['low'] for b in recent if b.get('high') and b.get('low')]
-                avg_range = (sum(ranges) / len(ranges)) if ranges else current * 0.015
-            range_pct = avg_range / current if current > 0 else 0.015
-            # If hourly bars (range < 0.5% each), scale up to ~1 day (6 bars)
-            if range_pct < 0.005:
-                avg_range *= 6
-            avg_range = max(current * 0.005, min(avg_range, current * 0.04))
-            return round(current + avg_range if direction == "BUY" else current - avg_range, 2)
+            try:
+                recent = bars[-min(10, len(bars)):]
+                if len(recent) < 2:
+                    avg_range = current * 0.015
+                else:
+                    ranges = [b['high'] - b['low'] for b in recent if b.get('high') and b.get('low')]
+                    avg_range = (sum(ranges) / len(ranges)) if ranges else current * 0.015
+                range_pct = avg_range / current if current > 0 else 0.015
+                # If hourly bars (range < 0.5% each), scale up to ~1 day (6 bars)
+                if range_pct < 0.005:
+                    avg_range *= 6
+                avg_range = max(current * 0.005, min(avg_range, current * 0.04))
+                target = current + avg_range if direction == "BUY" else current - avg_range
+                return json_safe_float(target)
+            except:
+                # Fallback: 1.5% move
+                return json_safe_float(current * 1.015 if direction == "BUY" else current * 0.985)
 
         # Run all mini strategies
         fk = run_mini_falling_knife(bars)
@@ -5207,8 +5235,9 @@ async def auto_scan_ticker(ticker: str):
             sl = current * 0.95
             signals.append({
                 "strategy": "Falling Knife", "direction": fk,
-                "entry": round(current, 2), "stoploss": round(sl, 2),
-                "targets": [round(current * 1.05, 2), round(current * 1.10, 2), round(current * 1.15, 2)],
+                "entry": json_safe_float(current), 
+                "stoploss": json_safe_float(sl),
+                "targets": [json_safe_float(current * 1.05), json_safe_float(current * 1.10), json_safe_float(current * 1.15)],
                 "confidence": 75,
                 "day_target": calc_day_target(fk),
             })
@@ -5379,11 +5408,11 @@ async def auto_scan_ticker(ticker: str):
                     mf_signal = {
                         "strategy": f"MiroFish ({mf_result['swarm_consensus']})",
                         "direction": mf_result['signal_type'],
-                        "entry": round(current, 2),
-                        "stoploss": float(mf_result.get('stop_loss', current * 0.97)),
-                        "targets": [float(t) for t in mf_result.get('targets', [])],
+                        "entry": json_safe_float(current),
+                        "stoploss": json_safe_float(mf_result.get('stop_loss', current * 0.97)),
+                        "targets": [json_safe_float(t) for t in mf_result.get('targets', [])],
                         "confidence": int(mf_result.get('confidence', 65)),
-                        "day_target": float(mf_result['day_target']) if mf_result.get('day_target') else calc_day_target(mf_result['signal_type']),
+                        "day_target": json_safe_float(mf_result.get('day_target', calc_day_target(mf_result['signal_type']))),
                     }
                     cache_storage[mf_cache_key] = {
                         "data": {"signal_type": mf_result['signal_type'], "signal": mf_signal},
@@ -5430,9 +5459,9 @@ async def auto_scan_ticker(ticker: str):
         else:
             confluence_label = "WEAK"
 
-        return {
+        result = {
             "ticker": ticker,
-            "current_price": round(current, 2),
+            "current_price": json_safe_float(current),
             "signals": signals,
             "has_signal": len(signals) > 0,
             "signal_count": len(signals),
@@ -5444,6 +5473,9 @@ async def auto_scan_ticker(ticker: str):
             "aligned_count": len(aligned),
             "total_strategies": 11,
         }
+        
+        # Sanitize all floats before returning
+        return sanitize_response(result)
     except HTTPException:
         raise
     except Exception as e:
