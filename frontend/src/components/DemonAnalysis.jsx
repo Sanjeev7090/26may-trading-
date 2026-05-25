@@ -13,6 +13,7 @@ const DemonAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [enabled, setEnabled] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showOverlay, setShowOverlay] = useState(true);
 
   const analyze = async () => {
     if (!stockData || !selectedStock) return;
@@ -22,7 +23,7 @@ const DemonAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
         ticker: selectedStock.ticker, bars: stockData.bars
       });
       setAnalysis(response.data);
-      if (onAnalysisComplete) onAnalysisComplete('demon', response.data);
+      if (onAnalysisComplete && showOverlay) onAnalysisComplete('demon', response.data);
       toast.success('DEMON analysis complete!');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Analysis failed');
@@ -56,13 +57,38 @@ const DemonAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
           <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400">DEMON</span>
           <span className="text-[8px] text-zinc-600">7-Strategy</span>
         </div>
-        <button
-          onClick={handleToggle}
-          className={`w-8 h-4 rounded-full transition-colors relative ${enabled ? 'bg-[#00E676]' : 'bg-zinc-700'}`}
-          data-testid="demon-toggle"
-        >
-          <div className={`w-3 h-3 rounded-full bg-white absolute top-0.5 transition-transform ${enabled ? 'left-[18px]' : 'left-0.5'}`} />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Yellow Toggle for Chart Overlay */}
+          {enabled && analysis && (
+            <button
+              onClick={() => {
+                const newState = !showOverlay;
+                setShowOverlay(newState);
+                if (onAnalysisComplete) {
+                  if (newState) onAnalysisComplete('demon', analysis);
+                  else onAnalysisComplete(null, null);
+                }
+              }}
+              className={`w-9 h-5 rounded-full transition-colors relative ${showOverlay ? 'bg-[#F5A623]' : 'bg-zinc-700'}`}
+              title="Toggle chart overlay"
+            >
+              <div className={`w-3.5 h-3.5 rounded-full bg-black absolute top-0.75 transition-transform ${showOverlay ? 'translate-x-5 left-[18px]' : 'left-0.75'}`} />
+            </button>
+          )}
+          
+          {/* Run/Toggle Button */}
+          <button
+            onClick={handleToggle}
+            className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-colors ${
+              enabled 
+                ? 'bg-[#00E676]/20 text-[#00E676] hover:bg-[#00E676]/30' 
+                : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'
+            }`}
+            data-testid="demon-toggle"
+          >
+            {loading ? 'Running...' : enabled ? 'STOP' : 'RUN DEMON'}
+          </button>
+        </div>
       </div>
 
       {enabled && loading && <p className="text-[10px] text-zinc-500 font-mono animate-pulse">Running 7 strategies...</p>}

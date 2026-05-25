@@ -32,6 +32,7 @@ const PhaseCard = ({ phase }) => {
 const SMCAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showOverlay, setShowOverlay] = useState(true);
 
   const runAnalysis = async () => {
     if (!stockData?.bars?.length) { toast.error('No data loaded'); return; }
@@ -46,10 +47,29 @@ const SMCAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
       if (data.signal_type !== 'WAIT') {
         toast.success(`SMC ${data.signal_type} Signal — ${data.daily_bias} Bias`);
       }
+      
+      // Send to chart overlay if toggle is ON
+      if (onAnalysisComplete && showOverlay) {
+        onAnalysisComplete('smc', data);
+      }
     } catch (e) {
       toast.error(e.response?.data?.detail || 'SMC Analysis failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggle = () => {
+    const newState = !showOverlay;
+    setShowOverlay(newState);
+    
+    // Update chart overlay immediately
+    if (onAnalysisComplete) {
+      if (newState && result) {
+        onAnalysisComplete('smc', result);
+      } else {
+        onAnalysisComplete(null, null);
+      }
     }
   };
 
@@ -65,11 +85,24 @@ const SMCAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
           <Crosshair size={14} className="text-[#00E676]" weight="bold" />
           <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400">SMC Analysis</span>
         </div>
-        <button onClick={runAnalysis} disabled={loading || !stockData}
-          className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider bg-[#00E676]/20 text-[#00E676] rounded hover:bg-[#00E676]/30 disabled:opacity-40 transition-colors"
-          data-testid="smc-run-btn">
-          {loading ? 'Scanning...' : 'RUN SMC'}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Yellow Toggle for Chart Overlay */}
+          <button
+            onClick={handleToggle}
+            className={`w-9 h-5 rounded-full transition-colors relative ${showOverlay ? 'bg-[#F5A623]' : 'bg-zinc-700'}`}
+            title="Toggle chart overlay"
+            data-testid="smc-overlay-toggle"
+          >
+            <div className={`w-3.5 h-3.5 rounded-full bg-black absolute top-0.75 transition-transform ${showOverlay ? 'translate-x-5 left-[18px]' : 'left-0.75'}`} />
+          </button>
+          
+          {/* Run Button */}
+          <button onClick={runAnalysis} disabled={loading || !stockData}
+            className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider bg-[#00E676]/20 text-[#00E676] rounded hover:bg-[#00E676]/30 disabled:opacity-40 transition-colors"
+            data-testid="smc-run-btn">
+            {loading ? 'Scanning...' : 'RUN SMC'}
+          </button>
+        </div>
       </div>
 
       {!result && !loading && (
