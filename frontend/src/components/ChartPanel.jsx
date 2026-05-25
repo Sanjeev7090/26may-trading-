@@ -3,6 +3,7 @@ import { createChart } from 'lightweight-charts';
 import { ChartLine, TrendUp, TrendDown, PencilLine, Trash, Lightning } from '@phosphor-icons/react';
 import GrowwTradeModal from './GrowwTradeModal';
 import StrategyOverlay from './StrategyOverlay';
+import TimeframeLevels from './TimeframeLevels';
 
 const ChartPanel = ({
   stockData, loading, selectedStock, onPivotSelect, pivotPoint, gannFan,
@@ -377,6 +378,12 @@ const ChartPanel = ({
           strategyData={strategyData}
           strategyType={activeStrategy}
           isActive={!!activeStrategy && !!strategyData}
+        />
+        
+        {/* Timeframe Levels - Always visible */}
+        <TimeframeLevels 
+          chart={chartRef.current}
+          bars={stockData?.bars}
         />
       </div>
 
