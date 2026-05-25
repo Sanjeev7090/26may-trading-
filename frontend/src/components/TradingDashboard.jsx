@@ -69,9 +69,15 @@ const TradingDashboard = () => {
   const [showNews, setShowNews] = useState(false);
   const [dataSource, setDataSource] = useState('groww'); // 'yahoo' | 'groww'
   const [optionsSheet, setOptionsSheet] = useState(null); // { symbol, name } | null
+  const [activeStrategy, setActiveStrategy] = useState(null); // Strategy type for overlay
+  const [strategyData, setStrategyData] = useState(null); // Strategy analysis data
   const wsRef = useRef(null);
 
-  // WebSocket connection for real-time prices
+  // Handler for strategy analysis completion - updates chart overlays
+  const handleStrategyAnalysis = (strategyType, data) => {
+    setActiveStrategy(strategyType);
+    setStrategyData(data);
+  };
   useEffect(() => {
     const wsUrl = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws/prices';
     try {
@@ -565,6 +571,8 @@ const TradingDashboard = () => {
                   fetchStockData(selectedStock.ticker, timeframe, s);
                 }
               }}
+              activeStrategy={activeStrategy}
+              strategyData={strategyData}
             />
           </div>
           {/* Order Flow Panel — below chart, scroll to see */}
@@ -599,20 +607,20 @@ const TradingDashboard = () => {
                 {selectedStock && stockData && (
                   <>
                     {isCrypto && <CryptoDashboard preSelectedCoin={selectedStock} />}
-                    <SMCAnalysis stockData={stockData} selectedStock={selectedStock} />
-                    <AMDSAnalysis stockData={stockData} selectedStock={selectedStock} />
-                    <MiroFishAnalysis stockData={stockData} selectedStock={selectedStock} />
-                    <PACSOAnalysis stockData={stockData} selectedStock={selectedStock} />
-                    <GPTAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
-                    <AITradeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
-                    <FallingKnifeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} />
-                    <ReversePriceSwings stockData={stockData} selectedStock={selectedStock} />
-                    <ExplosiveVolumeAnalysis stockData={stockData} selectedStock={selectedStock} />
-                    <GoldenSetupAnalysis stockData={stockData} selectedStock={selectedStock} />
-                    <AIIndicatorScore stockData={stockData} selectedStock={selectedStock} />
-                    <GodzillaSetupAnalysis stockData={stockData} selectedStock={selectedStock} />
-                    <DemonAnalysis stockData={stockData} selectedStock={selectedStock} />
-                    <NarrativeSwingAnalysis stockData={stockData} selectedStock={selectedStock} />
+                    <SMCAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <AMDSAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <MiroFishAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <PACSOAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <GPTAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} onAnalysisComplete={handleStrategyAnalysis} />
+                    <AITradeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} onAnalysisComplete={handleStrategyAnalysis} />
+                    <FallingKnifeAnalysis stockData={stockData} selectedStock={selectedStock} timeframe={timeframe} onAnalysisComplete={handleStrategyAnalysis} />
+                    <ReversePriceSwings stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <ExplosiveVolumeAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <GoldenSetupAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <AIIndicatorScore stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <GodzillaSetupAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <DemonAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <NarrativeSwingAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
                   </>
                 )}
                 {!selectedStock && (

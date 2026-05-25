@@ -7,7 +7,7 @@ import SignalIndicator from './SignalIndicator';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const FallingKnifeAnalysis = ({ stockData, selectedStock }) => {
+const FallingKnifeAnalysis = ({ stockData, selectedStock, onAnalysisComplete }) => {
   const [enabled, setEnabled] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -21,6 +21,11 @@ const FallingKnifeAnalysis = ({ stockData, selectedStock }) => {
       });
       setAnalysis(response.data);
       toast.success('Falling Knife analysis complete!');
+      
+      // Pass strategy data to parent for chart overlay
+      if (onAnalysisComplete) {
+        onAnalysisComplete('falling_knife', response.data);
+      }
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Analysis failed');
     } finally {
@@ -32,7 +37,13 @@ const FallingKnifeAnalysis = ({ stockData, selectedStock }) => {
     const next = !enabled;
     setEnabled(next);
     if (next && stockData) analyze();
-    else setAnalysis(null);
+    else {
+      setAnalysis(null);
+      // Clear strategy overlay when disabled
+      if (onAnalysisComplete) {
+        onAnalysisComplete(null, null);
+      }
+    }
   };
 
   return (

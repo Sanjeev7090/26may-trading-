@@ -2,11 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createChart } from 'lightweight-charts';
 import { ChartLine, TrendUp, TrendDown, PencilLine, Trash, Lightning } from '@phosphor-icons/react';
 import GrowwTradeModal from './GrowwTradeModal';
+import StrategyOverlay from './StrategyOverlay';
 
 const ChartPanel = ({
   stockData, loading, selectedStock, onPivotSelect, pivotPoint, gannFan,
   semiLogScale, setSemiLogScale, timeframe, onTimeframeChange, isCrypto,
-  dataSource, onDataSourceChange
+  dataSource, onDataSourceChange, activeStrategy, strategyData
 }) => {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
@@ -368,6 +369,15 @@ const ChartPanel = ({
             <p className="text-[10px] text-zinc-600 mt-1 font-mono">Scroll to zoom / Drag to pan</p>
           </div>
         )}
+        
+        {/* Strategy Overlay Component */}
+        <StrategyOverlay 
+          chart={chartRef.current}
+          bars={stockData?.bars}
+          strategyData={strategyData}
+          strategyType={activeStrategy}
+          isActive={!!activeStrategy && !!strategyData}
+        />
       </div>
 
       {/* Status bar */}
