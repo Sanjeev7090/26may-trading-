@@ -35,6 +35,7 @@ import OrderFlowPanel from './OrderFlowPanel';
 import GrowwPortfolio from './GrowwPortfolio';
 import IndicesTickerBar from './IndicesTickerBar';
 import TopOptionsSheet from './TopOptionsSheet';
+import MonteCarloSimulation from './MonteCarloSimulation';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -387,6 +388,7 @@ const TradingDashboard = () => {
     { id: 'strategies', label: 'STRATEGIES' },
     { id: 'ghost', label: 'GHOST' },
     { id: 'backtest', label: 'BACKTEST' },
+    { id: 'montecarlo', label: 'MONTE CARLO' },
   ];
 
   const leftTabs = [
@@ -629,6 +631,10 @@ const TradingDashboard = () => {
 
             {activeTab === 'backtest' && (
               <BacktestModule selectedStock={selectedStock} />
+            )}
+
+            {activeTab === 'montecarlo' && (
+              <MonteCarloSimulation ticker={selectedStock?.ticker || selectedStock?.id} />
             )}
           </div>
         </aside>

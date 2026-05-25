@@ -16,6 +16,8 @@ import httpx
 import websockets
 import yfinance as yf
 import pandas as pd
+import numpy as np
+import random
 from nsepython import nse_optionchain_scrapper, nse_quote_ltp
 from openai import OpenAI, AsyncOpenAI
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -280,6 +282,59 @@ class BacktestRequest(BaseModel):
     strategy: str  # 'falling_knife', 'golden_setup', 'demon', 'reverse_swings', 'godzilla', 'smc', 'amds', 'narrative_swing', 'all'
     days: int = 90
     timeframe: str = 'intraday'
+
+class MonteCarloRequest(BaseModel):
+    ticker: str
+    strategy: str
+    days: int = 90
+    timeframe: str = 'intraday'
+    simulations: int = 1000  # Number of Monte Carlo simulations
+    initial_capital: float = 100000.0
+
+class MonteCarloResult(BaseModel):
+    simulation_id: int
+    total_return: float
+    win_rate: float
+    max_drawdown: float
+    sharpe_ratio: float
+    total_trades: int
+
+class MonteCarloResponse(BaseModel):
+    ticker: str
+    strategy: str
+    simulations: int
+    initial_capital: float
+    
+    # Summary statistics
+    avg_return: float
+    median_return: float
+    best_return: float
+    worst_return: float
+    std_return: float
+    
+    avg_win_rate: float
+    median_win_rate: float
+    
+    avg_max_drawdown: float
+    worst_drawdown: float
+    
+    avg_sharpe: float
+    median_sharpe: float
+    
+    # Confidence intervals (5th, 25th, 75th, 95th percentiles)
+    return_percentiles: Dict[str, float]
+    winrate_percentiles: Dict[str, float]
+    drawdown_percentiles: Dict[str, float]
+    
+    # Probability metrics
+    prob_positive_return: float  # % of simulations with positive return
+    prob_above_market: float  # % beating 10% benchmark
+    
+    # Distribution data for charts (100 bins)
+    return_distribution: List[Dict[str, float]]
+    
+    # Sample simulations
+    sample_simulations: List[MonteCarloResult]
 
 
 # ======================= NARRATIVE SWING TRADER MODELS =======================
@@ -7001,6 +7056,262 @@ async def run_backtest(request: BacktestRequest):
     except Exception as e:
         logging.error(f"Backtest error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ======================= MONTE CARLO SIMULATION =======================
+
+def _run_monte_carlo_simulation(trades: List[BacktestTradeResult], initial_capital: float, simulation_id: int) -> MonteCarloResult:
+    """
+    Run single Monte Carlo simulation by randomizing trade sequence.
+    Calculates return, win rate, max drawdown, Sharpe ratio.
+    """
+    if not trades:
+        return MonteCarloResult(
+            simulation_id=simulation_id,
+            total_return=0,
+            win_rate=0,
+            max_drawdown=0,
+            sharpe_ratio=0,
+            total_trades=0
+        )
+    
+    # Randomize trade sequence
+    shuffled_trades = random.sample(trades, len(trades))
+    
+    # Calculate metrics
+    capital = initial_capital
+    equity_curve = [capital]
+    returns = []
+    
+    winning = 0
+    losing = 0
+    
+    for trade in shuffled_trades:
+        # Apply P&L
+        pnl = capital * (trade.pnl_pct / 100)
+        capital += pnl
+        equity_curve.append(capital)
+        returns.append(trade.pnl_pct / 100)
+        
+        if trade.pnl_pct > 0:
+            winning += 1
+        else:
+            losing += 1
+    
+    # Total return
+    total_return = ((capital - initial_capital) / initial_capital) * 100
+    
+    # Win rate
+    total_trades = winning + losing
+    win_rate = (winning / total_trades * 100) if total_trades > 0 else 0
+    
+    # Max drawdown
+    peak = initial_capital
+    max_dd = 0
+    for eq in equity_curve:
+        if eq > peak:
+            peak = eq
+        dd = ((peak - eq) / peak) * 100
+        if dd > max_dd:
+            max_dd = dd
+    
+    # Sharpe ratio (assuming risk-free rate = 0)
+    if len(returns) > 1:
+        avg_return = np.mean(returns)
+        std_return = np.std(returns)
+        sharpe = (avg_return / std_return) * np.sqrt(252) if std_return > 0 else 0
+    else:
+        sharpe = 0
+    
+    return MonteCarloResult(
+        simulation_id=simulation_id,
+        total_return=round(total_return, 2),
+        win_rate=round(win_rate, 1),
+        max_drawdown=round(max_dd, 2),
+        sharpe_ratio=round(sharpe, 2),
+        total_trades=total_trades
+    )
+
+
+@api_router.post("/monte-carlo", response_model=MonteCarloResponse)
+async def run_monte_carlo(request: MonteCarloRequest):
+    """
+    Monte Carlo simulation for backtesting.
+    Randomizes trade sequence N times to test strategy robustness.
+    Returns distribution of returns, win rates, drawdowns, and confidence intervals.
+    """
+    try:
+        # First, get all trades using regular backtest logic
+        is_crypto = request.ticker.lower() in CRYPTO_IDS
+        
+        if is_crypto:
+            coin_id = request.ticker.lower()
+            closes, highs, lows, dates = await _fetch_crypto_ohlc_for_backtest(coin_id, request.days)
+            if closes is None or len(closes) < 20:
+                raise HTTPException(status_code=400, detail="Insufficient crypto data")
+        else:
+            ticker_obj = yf.Ticker(request.ticker)
+            
+            if request.timeframe == 'intraday':
+                max_days = min(request.days, 59)
+                hist = ticker_obj.history(period=f"{max_days}d", interval="30m")
+                if hist.empty or len(hist) < 30:
+                    hist = ticker_obj.history(period=f"{max_days}d", interval="1h")
+                if hist.empty or len(hist) < 30:
+                    hist = ticker_obj.history(period=f"{request.days}d", interval="1d")
+            elif request.timeframe == 'short_term':
+                hist = ticker_obj.history(period=f"{request.days}d", interval="1d")
+            else:
+                hist = ticker_obj.history(period=f"{request.days}d", interval="1wk")
+            
+            if hist.empty or len(hist) < 20:
+                raise HTTPException(status_code=400, detail="Insufficient data")
+            
+            closes = hist['Close'].values.tolist()
+            highs = hist['High'].values.tolist()
+            lows = hist['Low'].values.tolist()
+            dates = [d.strftime("%Y-%m-%d %H:%M") if hasattr(d, 'strftime') else str(d) for d in hist.index]
+        
+        max_exit_bars = 8 if request.timeframe == 'intraday' else 6
+        
+        # Get all trades for the strategy
+        if request.strategy == 'all':
+            all_trades = []
+            all_trades += _bt_falling_knife(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_golden_setup(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_reverse_swings(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_godzilla(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_demon(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_smc(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_amds(closes, highs, lows, dates, max_exit_bars)
+            all_trades += _bt_narrative_swing(closes, highs, lows, dates, max_exit_bars)
+            all_trades.sort(key=lambda t: t.entry_date)
+            trades = all_trades
+        elif request.strategy == 'falling_knife':
+            trades = _bt_falling_knife(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'golden_setup':
+            trades = _bt_golden_setup(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'reverse_swings':
+            trades = _bt_reverse_swings(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'godzilla':
+            trades = _bt_godzilla(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'demon':
+            trades = _bt_demon(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'smc':
+            trades = _bt_smc(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'amds':
+            trades = _bt_amds(closes, highs, lows, dates, max_exit_bars)
+        elif request.strategy == 'narrative_swing':
+            trades = _bt_narrative_swing(closes, highs, lows, dates, max_exit_bars)
+        else:
+            trades = []
+        
+        if not trades:
+            raise HTTPException(status_code=400, detail="No trades generated for this strategy")
+        
+        # Run Monte Carlo simulations
+        simulations = []
+        for i in range(request.simulations):
+            result = _run_monte_carlo_simulation(trades, request.initial_capital, i + 1)
+            simulations.append(result)
+        
+        # Calculate statistics
+        returns = [s.total_return for s in simulations]
+        win_rates = [s.win_rate for s in simulations]
+        drawdowns = [s.max_drawdown for s in simulations]
+        sharpes = [s.sharpe_ratio for s in simulations]
+        
+        # Summary stats
+        avg_return = round(np.mean(returns), 2)
+        median_return = round(np.median(returns), 2)
+        best_return = round(max(returns), 2)
+        worst_return = round(min(returns), 2)
+        std_return = round(np.std(returns), 2)
+        
+        avg_win_rate = round(np.mean(win_rates), 1)
+        median_win_rate = round(np.median(win_rates), 1)
+        
+        avg_max_drawdown = round(np.mean(drawdowns), 2)
+        worst_drawdown = round(max(drawdowns), 2)
+        
+        avg_sharpe = round(np.mean(sharpes), 2)
+        median_sharpe = round(np.median(sharpes), 2)
+        
+        # Percentiles
+        return_percentiles = {
+            "5th": round(np.percentile(returns, 5), 2),
+            "25th": round(np.percentile(returns, 25), 2),
+            "50th": round(np.percentile(returns, 50), 2),
+            "75th": round(np.percentile(returns, 75), 2),
+            "95th": round(np.percentile(returns, 95), 2),
+        }
+        
+        winrate_percentiles = {
+            "5th": round(np.percentile(win_rates, 5), 1),
+            "25th": round(np.percentile(win_rates, 25), 1),
+            "50th": round(np.percentile(win_rates, 50), 1),
+            "75th": round(np.percentile(win_rates, 75), 1),
+            "95th": round(np.percentile(win_rates, 95), 1),
+        }
+        
+        drawdown_percentiles = {
+            "5th": round(np.percentile(drawdowns, 5), 2),
+            "25th": round(np.percentile(drawdowns, 25), 2),
+            "50th": round(np.percentile(drawdowns, 50), 2),
+            "75th": round(np.percentile(drawdowns, 75), 2),
+            "95th": round(np.percentile(drawdowns, 95), 2),
+        }
+        
+        # Probability metrics
+        prob_positive = round((sum(1 for r in returns if r > 0) / len(returns)) * 100, 1)
+        prob_above_market = round((sum(1 for r in returns if r > 10) / len(returns)) * 100, 1)
+        
+        # Return distribution for histogram (50 bins)
+        hist_counts, hist_edges = np.histogram(returns, bins=50)
+        return_distribution = []
+        for i in range(len(hist_counts)):
+            return_distribution.append({
+                "bin_start": round(hist_edges[i], 2),
+                "bin_end": round(hist_edges[i + 1], 2),
+                "count": int(hist_counts[i])
+            })
+        
+        # Sample simulations (10 random samples)
+        sample_indices = random.sample(range(len(simulations)), min(10, len(simulations)))
+        sample_simulations = [simulations[i] for i in sample_indices]
+        
+        return MonteCarloResponse(
+            ticker=request.ticker,
+            strategy=request.strategy,
+            simulations=request.simulations,
+            initial_capital=request.initial_capital,
+            avg_return=avg_return,
+            median_return=median_return,
+            best_return=best_return,
+            worst_return=worst_return,
+            std_return=std_return,
+            avg_win_rate=avg_win_rate,
+            median_win_rate=median_win_rate,
+            avg_max_drawdown=avg_max_drawdown,
+            worst_drawdown=worst_drawdown,
+            avg_sharpe=avg_sharpe,
+            median_sharpe=median_sharpe,
+            return_percentiles=return_percentiles,
+            winrate_percentiles=winrate_percentiles,
+            drawdown_percentiles=drawdown_percentiles,
+            prob_positive_return=prob_positive,
+            prob_above_market=prob_above_market,
+            return_distribution=return_distribution,
+            sample_simulations=sample_simulations
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Monte Carlo error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ======================= CRYPTO (CoinGecko + Binance) =======================
