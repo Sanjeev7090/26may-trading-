@@ -18,7 +18,6 @@ import Watchlist from './Watchlist';
 import PortfolioTracker from './PortfolioTracker';
 import AlertSystem from './AlertSystem';
 import GPTAnalysis from './GPTAnalysis';
-import BacktestModule from './BacktestModule';
 import CryptoList from './CryptoList';
 import CryptoDashboard from './CryptoDashboard';
 import AutoScanner from './AutoScanner';
@@ -387,7 +386,6 @@ const TradingDashboard = () => {
     { id: 'scanner', label: 'SCANNER' },
     { id: 'strategies', label: 'STRATEGIES' },
     { id: 'ghost', label: 'GHOST' },
-    { id: 'backtest', label: 'BACKTEST' },
     { id: 'montecarlo', label: 'MONTE CARLO' },
   ];
 
@@ -627,10 +625,6 @@ const TradingDashboard = () => {
 
             {activeTab === 'ghost' && (
               <GhostModeScanner onStockSelect={handleStockSelect} />
-            )}
-
-            {activeTab === 'backtest' && (
-              <BacktestModule selectedStock={selectedStock} />
             )}
 
             {activeTab === 'montecarlo' && (
