@@ -4614,140 +4614,385 @@ class DemonResponse(BaseModel):
 
 
 def run_mini_falling_knife(bars):
-    """Quick falling knife check"""
+    """
+    Falling Knife — Reversal Buy Strategy
+    CONDITIONS (strict):
+      1. Stock dropped 40%+ from its 52W (or available) high
+      2. Reversal candle in the LAST 2 bars (hammer, bullish engulfing, or pin bar)
+      3. Volume on reversal bar > 1.3x average (confirmation)
+    ENTRY  : Recent 5-bar swing low (limit zone, not market)
+    SL     : 1.5% below the absolute lowest low of last 10 bars
+    TARGETS: Fibonacci 23.6%, 38.2%, 61.8% of the (peak→low) range
+    """
     try:
         closes = [b['close'] for b in bars]
-        highs = [b['high'] for b in bars]
-        peak = max(highs)
+        highs  = [b['high']  for b in bars]
+        lows   = [b['low']   for b in bars]
+        vols   = [b.get('volume', 0) for b in bars]
+
+        if len(bars) < 20:
+            return "WAIT", None
+
+        peak    = max(highs[-min(252, len(highs)):])
         current = closes[-1]
-        drop = ((peak - current) / peak) * 100
-        if drop >= 40:
-            return "BUY"
-        return "WAIT"
+        drop    = (peak - current) / peak * 100
+
+        if drop < 40:
+            return "WAIT", None
+
+        # Reversal candle check (last 2 bars)
+        last, prev = bars[-1], bars[-2]
+        body      = abs(last['close'] - last['open'])
+        lo_shadow = min(last['open'], last['close']) - last['low']
+        # Hammer: lower shadow >= 2× body
+        hammer     = lo_shadow >= 2 * max(body, last['close'] * 0.001)
+        # Bullish engulfing: current candle engulfs previous red candle
+        engulfing  = (last['close'] > last['open'] and
+                      prev['close'] < prev['open'] and
+                      last['close'] > prev['open'] and
+                      last['open']  < prev['close'])
+
+        if not (hammer or engulfing):
+            return "WAIT", None
+
+        # Volume confirmation
+        vol_avg = sum(vols[-20:]) / max(len(vols[-20:]), 1)
+        if vol_avg > 0 and vols[-1] < 1.3 * vol_avg:
+            return "WAIT", None
+
+        # Levels
+        abs_low = min(lows[-10:])
+        entry   = round(min(lows[-5:]) * 1.005, 2)     # slightly above recent low
+        sl      = round(abs_low * 0.985, 2)             # 1.5% below absolute low
+        rng     = peak - abs_low
+        t1 = round(abs_low + rng * 0.236, 2)
+        t2 = round(abs_low + rng * 0.382, 2)
+        t3 = round(abs_low + rng * 0.618, 2)
+
+        return "BUY", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}
     except Exception:
-        return "WAIT"
+        return "WAIT", None
 
 
 def run_mini_reverse_swings(bars, method):
-    """Quick reverse swings check"""
+    """
+    Reverse Swings — Swing Exhaustion Reversal
+    METHOD A (BUY): Price pulled back to clear swing-low zone; must bounce from there
+      - Fell 5%+ from recent high
+      - Now within 1% of the swing low (at the entry zone)
+      - Bullish candle at the swing low
+    METHOD B (SELL): Price pushed up to swing-high zone; must reverse from there
+      - Rose 5%+ from recent low
+      - Now within 1% of the swing high
+      - Bearish candle at the swing high
+    ENTRY : Exact swing low/high level
+    SL    : ATR × 1.5 beyond the swing extreme
+    TARGET: 50% and 100% of the prior swing range
+    """
     try:
         closes = [b['close'] for b in bars]
-        if len(closes) < 10:
-            return "WAIT"
+        highs  = [b['high']  for b in bars]
+        lows   = [b['low']   for b in bars]
+
+        if len(closes) < 20:
+            return "WAIT", None
+
         current = closes[-1]
-        c5 = closes[-6]
-        if method == "A" and current < c5:
-            diffs = [abs(closes[i] - closes[i-1]) for i in range(1, len(closes))]
-            avg = sum(diffs) / len(diffs) if diffs else 0
-            current_diff = abs(current - c5)
-            if current_diff > avg * 1.5:
-                return "BUY"
-        elif method == "B" and current > c5:
-            diffs = [abs(closes[i] - closes[i-1]) for i in range(1, len(closes))]
-            avg = sum(diffs) / len(diffs) if diffs else 0
-            current_diff = abs(current - c5)
-            if current_diff > avg * 1.5:
-                return "SELL"
-        return "WAIT"
+        atr     = _smc_compute_atr(highs, lows, closes, 14)
+        last    = bars[-1]
+
+        if method == "A":  # BUY at swing low
+            lookback    = min(20, len(closes) - 5)
+            swing_low   = min(lows[-lookback:-1])
+            recent_high = max(highs[-lookback:-1])
+
+            drop_to_low = (recent_high - swing_low) / recent_high * 100
+            if drop_to_low < 5:
+                return "WAIT", None                         # Not a meaningful swing
+
+            # Price must be AT the swing low (within 1%)
+            dist = abs(current - swing_low) / swing_low * 100
+            if dist > 1.0:
+                return "WAIT", None
+
+            # Bullish reversal candle required
+            if last['close'] <= last['open']:
+                return "WAIT", None
+
+            entry = round(swing_low * 1.005, 2)
+            sl    = round(swing_low - atr * 1.5, 2)
+            rng   = recent_high - swing_low
+            t1    = round(swing_low + rng * 0.50, 2)
+            t2    = round(swing_low + rng * 1.00, 2)
+            t3    = round(swing_low + rng * 1.50, 2)
+            return "BUY", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}
+
+        elif method == "B":  # SELL at swing high
+            lookback     = min(20, len(closes) - 5)
+            swing_high   = max(highs[-lookback:-1])
+            recent_low   = min(lows[-lookback:-1])
+
+            rise_to_high = (swing_high - recent_low) / recent_low * 100
+            if rise_to_high < 5:
+                return "WAIT", None
+
+            dist = abs(current - swing_high) / swing_high * 100
+            if dist > 1.0:
+                return "WAIT", None
+
+            # Bearish reversal candle required
+            if last['close'] >= last['open']:
+                return "WAIT", None
+
+            entry = round(swing_high * 0.995, 2)
+            sl    = round(swing_high + atr * 1.5, 2)
+            rng   = swing_high - recent_low
+            t1    = round(swing_high - rng * 0.50, 2)
+            t2    = round(swing_high - rng * 1.00, 2)
+            t3    = round(swing_high - rng * 1.50, 2)
+            return "SELL", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}
+
+        return "WAIT", None
     except Exception:
-        return "WAIT"
+        return "WAIT", None
 
 
 def run_mini_explosive_volume(bars):
-    """Quick explosive volume check"""
+    """
+    Explosive Volume Breakout
+    CONDITIONS:
+      1. Volume on last bar > 2× 20-day avg volume
+      2. Price closing above the 20-day high (valid breakout, not just touch)
+      3. Bullish candle — close in upper 60% of range
+    ENTRY : Breakout candle's closing price
+    SL    : Below the breakout candle's low (max loss = candle range)
+    TARGET: Measured move — candle range × 1.5 / 2.5 / 4.0 projected from close
+    """
     try:
         closes = [b['close'] for b in bars]
-        volumes = [b['volume'] for b in bars]
-        highs = [b['high'] for b in bars]
-        if len(bars) < 50:
-            return "WAIT"
-        vol_sma = sum(volumes[-50:]) / 50
-        if volumes[-1] > 2 * vol_sma:
-            high_60 = max(highs[-60:]) if len(highs) >= 60 else max(highs)
-            if ((high_60 - closes[-1]) / high_60 * 100) <= 5:
-                return "BUY"
-        return "WAIT"
+        highs  = [b['high']  for b in bars]
+        lows   = [b['low']   for b in bars]
+        vols   = [b.get('volume', 0) for b in bars]
+
+        if len(bars) < 25:
+            return "WAIT", None
+
+        vol_avg = sum(vols[-20:]) / max(len(vols[-20:]), 1)
+        if vol_avg == 0 or vols[-1] < 2.0 * vol_avg:
+            return "WAIT", None
+
+        last    = bars[-1]
+        current = closes[-1]
+
+        # Must close ABOVE the 20-day prior high (actual breakout)
+        prior_high20 = max(highs[-21:-1])
+        if current <= prior_high20:
+            return "WAIT", None
+
+        # Bullish candle — close in upper 60% of bar range
+        bar_range = last['high'] - last['low']
+        if bar_range == 0:
+            return "WAIT", None
+        close_position = (last['close'] - last['low']) / bar_range
+        if close_position < 0.6:
+            return "WAIT", None
+
+        entry = round(current, 2)
+        sl    = round(last['low'] * 0.995, 2)
+        t1    = round(current + bar_range * 1.5, 2)
+        t2    = round(current + bar_range * 2.5, 2)
+        t3    = round(current + bar_range * 4.0, 2)
+
+        return "BUY", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}
     except Exception:
-        return "WAIT"
+        return "WAIT", None
 
 
 def run_mini_golden_setup(bars):
-    """Quick golden setup check"""
+    """
+    Golden Setup — EMA Pullback in Trend
+    BUY  LOGIC : Uptrend (price > SMA200, EMA20 > EMA50) AND price has pulled back
+                 to within 1.5% of EMA20 AND last candle is bullish at that level.
+    SELL LOGIC : Downtrend (price < SMA200, EMA20 < EMA50) AND price has bounced
+                 to within 1.5% of EMA20 AND last candle is bearish at that level.
+    ENTRY : EMA20 value (the pullback/bounce level)
+    SL    : EMA50 level ± ATR × 0.5 (break of structure)
+    TARGET: Previous swing high (BUY) or previous swing low (SELL)
+    """
     try:
         closes = [b['close'] for b in bars]
-        if len(closes) < 50:
-            return "WAIT"
-        sma200 = sum(closes[-min(200, len(closes)):]) / min(200, len(closes))
-        ema20 = calc_ema(closes, 20)
-        ema50 = calc_ema(closes, 50)
-        current = closes[-1]
-        last = bars[-1]
-        bullish = is_bullish_candle(last['open'], last['high'], last['low'], last['close'])
-        bearish = is_bearish_candle(last['open'], last['high'], last['low'], last['close'])
+        highs  = [b['high']  for b in bars]
+        lows   = [b['low']   for b in bars]
 
-        if current > sma200 and ema20 > ema50 and bullish:
-            return "BUY"
-        elif current < sma200 and ema20 < ema50 and bearish:
-            return "SELL"
-        return "WAIT"
+        if len(closes) < 50:
+            return "WAIT", None
+
+        sma200 = sum(closes[-min(200, len(closes)):]) / min(200, len(closes))
+        ema20  = calc_ema(closes, 20)
+        ema50  = calc_ema(closes, 50)
+        atr    = _smc_compute_atr(highs, lows, closes, 14)
+        current = closes[-1]
+        last    = bars[-1]
+
+        dist_to_ema20 = abs(current - ema20) / ema20 * 100
+
+        # ---- BULLISH SETUP ----
+        if current > sma200 and ema20 > ema50:
+            # Price must have pulled back TO EMA20 (within 1.5%)
+            if dist_to_ema20 > 1.5:
+                return "WAIT", None
+            # Bullish candle required at EMA20
+            if last['close'] <= last['open']:
+                return "WAIT", None
+
+            entry = round(ema20, 2)
+            sl    = round(ema50 - atr * 0.5, 2)
+            # Targets: recent swing highs
+            swing_highs = sorted(highs[-20:-1], reverse=True)
+            t1 = round(swing_highs[0] if swing_highs else current * 1.03, 2)
+            t2 = round(swing_highs[0] * 1.02 if swing_highs else current * 1.06, 2)
+            t3 = round(swing_highs[0] * 1.05 if swing_highs else current * 1.10, 2)
+            return "BUY", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}
+
+        # ---- BEARISH SETUP ----
+        elif current < sma200 and ema20 < ema50:
+            if dist_to_ema20 > 1.5:
+                return "WAIT", None
+            if last['close'] >= last['open']:
+                return "WAIT", None
+
+            entry = round(ema20, 2)
+            sl    = round(ema50 + atr * 0.5, 2)
+            swing_lows = sorted(lows[-20:-1])
+            t1 = round(swing_lows[0] if swing_lows else current * 0.97, 2)
+            t2 = round(swing_lows[0] * 0.98 if swing_lows else current * 0.94, 2)
+            t3 = round(swing_lows[0] * 0.95 if swing_lows else current * 0.90, 2)
+            return "SELL", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}
+
+        return "WAIT", None
     except Exception:
-        return "WAIT"
+        return "WAIT", None
 
 
 def run_mini_ai_indicator(bars):
-    """Quick AI indicator check"""
+    """
+    AI Multi-Indicator Score
+    CONDITIONS (strict):
+      - Score > 75 → BUY  (was 70; stricter to avoid noise)
+      - Score < 25 → SELL (was 30)
+    ENTRY : EMA20 (if price is near EMA20) else current (momentum)
+    SL    : ATR × 1.5 below entry (BUY) or above entry (SELL)
+    TARGET: ATR × 2, 3, 4 from entry
+    """
     try:
-        highs = [b['high'] for b in bars]
-        lows = [b['low'] for b in bars]
+        highs  = [b['high']  for b in bars]
+        lows   = [b['low']   for b in bars]
         closes = [b['close'] for b in bars]
+
         if len(closes) < 26:
             return "WAIT", 50
 
-        dmi_s, _, _ = calc_dmi_score(highs, lows, closes)
-        ma_s = calc_ma_score(closes)
+        dmi_s  = calc_dmi_score(highs, lows, closes)[0]
+        ma_s   = calc_ma_score(closes)
         macd_s = calc_macd_score(closes)
-        rsi_val = calc_rsi(closes, 14)
-        rsi_s = calc_rsi_score(rsi_val)
+        rsi_val= calc_rsi(closes, 14)
+        rsi_s  = calc_rsi_score(rsi_val)
         pk, pd_val = calc_stochastics(highs, lows, closes)
-        stoch_s = calc_stoch_score(pk, pd_val)
-        score = (dmi_s * 0.30) + (ma_s * 0.25) + (macd_s * 0.20) + (rsi_s * 0.15) + (stoch_s * 0.10)
+        stoch_s= calc_stoch_score(pk, pd_val)
+        score  = (dmi_s * 0.30 + ma_s * 0.25 + macd_s * 0.20 + rsi_s * 0.15 + stoch_s * 0.10)
 
-        if score > 70:
-            return "BUY", round(score, 1)
-        elif score < 30:
-            return "SELL", round(score, 1)
-        return "WAIT", round(score, 1)
+        if score <= 75 and score >= 25:
+            return "WAIT", round(score, 1)
+
+        atr     = _smc_compute_atr(highs, lows, closes, 14)
+        ema20   = calc_ema(closes, 20)
+        current = closes[-1]
+        # Entry: near EMA20 if within 2%, else current
+        entry   = round(ema20 if abs(current - ema20) / ema20 * 100 < 2.0 else current, 2)
+
+        if score > 75:
+            sl = round(entry - atr * 1.5, 2)
+            t1 = round(entry + atr * 2.0, 2)
+            t2 = round(entry + atr * 3.0, 2)
+            t3 = round(entry + atr * 4.0, 2)
+            return "BUY", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}, round(score, 1)
+
+        else:  # score < 25
+            sl = round(entry + atr * 1.5, 2)
+            t1 = round(entry - atr * 2.0, 2)
+            t2 = round(entry - atr * 3.0, 2)
+            t3 = round(entry - atr * 4.0, 2)
+            return "SELL", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}, round(score, 1)
+
     except Exception:
-        return "WAIT", 50
+        return "WAIT", None, 50
 
 
 def run_mini_godzilla(bars):
-    """Quick godzilla check"""
+    """
+    Godzilla TTE — Ross Hook Breakout
+    CONDITIONS:
+      - A Ross Hook (up or down) detected in the last 8 bars
+      - Current price has BROKEN OUT above the hook high (BUY) / below hook low (SELL)
+    ENTRY : Just above/below the breakout level (confirmed breakout only)
+    SL    : Below the lowest low of bars since the hook (for BUY) — 0.5% buffer
+    TARGET: Risk × 1.5, 2.5, 4.0 (R:R based)
+    """
     try:
-        highs = [b['high'] for b in bars]
-        lows = [b['low'] for b in bars]
+        highs  = [b['high']  for b in bars]
+        lows   = [b['low']   for b in bars]
         closes = [b['close'] for b in bars]
+
         if len(bars) < 20:
-            return "WAIT"
-        hooks = detect_ross_hooks(highs, lows, closes)
+            return "WAIT", None
+
+        hooks    = detect_ross_hooks(highs, lows, closes)
         relevant = [h for h in hooks if h["bar_index_from_end"] <= 8]
+
         if not relevant:
-            return "WAIT"
-        hook = relevant[-1]
+            return "WAIT", None
+
+        hook     = relevant[-1]
         hook_idx = hook["index"]
-        current = closes[-1]
+        current  = closes[-1]
         bars_after = len(bars) - 1 - hook_idx
+
         for i in range(1, min(bars_after, 3) + 1):
             bi = hook_idx + i
             if bi >= len(bars):
                 break
-            if hook["type"] == "up" and current > bars[bi]['high']:
-                return "BUY"
-            elif hook["type"] == "down" and current < bars[bi]['low']:
-                return "SELL"
-        return "WAIT"
+
+            if hook["type"] == "up":
+                breakout_level = bars[bi]['high']
+                if current > breakout_level:
+                    entry   = round(breakout_level * 1.001, 2)
+                    sl_base = min(lows[hook_idx: hook_idx + i + 1])
+                    sl      = round(sl_base * 0.995, 2)
+                    risk    = entry - sl
+                    if risk <= 0:
+                        return "WAIT", None
+                    t1 = round(entry + risk * 1.5, 2)
+                    t2 = round(entry + risk * 2.5, 2)
+                    t3 = round(entry + risk * 4.0, 2)
+                    return "BUY", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}
+
+            elif hook["type"] == "down":
+                breakout_level = bars[bi]['low']
+                if current < breakout_level:
+                    entry   = round(breakout_level * 0.999, 2)
+                    sl_base = max(highs[hook_idx: hook_idx + i + 1])
+                    sl      = round(sl_base * 1.005, 2)
+                    risk    = sl - entry
+                    if risk <= 0:
+                        return "WAIT", None
+                    t1 = round(entry - risk * 1.5, 2)
+                    t2 = round(entry - risk * 2.5, 2)
+                    t3 = round(entry - risk * 4.0, 2)
+                    return "SELL", {"entry": entry, "sl": sl, "targets": [t1, t2, t3]}
+
+        return "WAIT", None
     except Exception:
-        return "WAIT"
+        return "WAIT", None
 
 
 @api_router.post("/demon/analyze", response_model=DemonResponse)
@@ -5244,88 +5489,85 @@ async def auto_scan_ticker(ticker: str):
                 # Fallback: 1.5% move
                 return json_safe_float(current * 1.015 if direction == "BUY" else current * 0.985)
 
-        # Run all mini strategies
-        fk = run_mini_falling_knife(bars)
-        if fk != "WAIT":
-            sl = current * 0.95
+        # Run all mini strategies — each returns (direction, levels_dict) or WAIT
+        fk_dir, fk_lvl = run_mini_falling_knife(bars)
+        if fk_dir != "WAIT" and fk_lvl:
             signals.append({
-                "strategy": "Falling Knife", "direction": fk,
-                "entry": json_safe_float(current), 
-                "stoploss": json_safe_float(sl),
-                "targets": [json_safe_float(current * 1.05), json_safe_float(current * 1.10), json_safe_float(current * 1.15)],
-                "confidence": 75,
-                "day_target": calc_day_target(fk),
+                "strategy": "Falling Knife", "direction": fk_dir,
+                "entry": json_safe_float(fk_lvl["entry"]),
+                "stoploss": json_safe_float(fk_lvl["sl"]),
+                "targets": [json_safe_float(t) for t in fk_lvl["targets"]],
+                "confidence": 78,
+                "day_target": json_safe_float(fk_lvl["targets"][0]),
             })
 
-        rsa = run_mini_reverse_swings(bars, "A")
-        if rsa != "WAIT":
-            sl = current * (0.97 if rsa == "BUY" else 1.03)
-            mult = [1.03, 1.06, 1.09] if rsa == "BUY" else [0.97, 0.94, 0.91]
+        rsa_dir, rsa_lvl = run_mini_reverse_swings(bars, "A")
+        if rsa_dir != "WAIT" and rsa_lvl:
             signals.append({
-                "strategy": "Reverse Swings A", "direction": rsa,
-                "entry": round(current, 2), "stoploss": round(sl, 2),
-                "targets": [round(current * m, 2) for m in mult],
-                "confidence": 70,
-                "day_target": calc_day_target(rsa),
+                "strategy": "Reverse Swings A", "direction": rsa_dir,
+                "entry": json_safe_float(rsa_lvl["entry"]),
+                "stoploss": json_safe_float(rsa_lvl["sl"]),
+                "targets": [json_safe_float(t) for t in rsa_lvl["targets"]],
+                "confidence": 72,
+                "day_target": json_safe_float(rsa_lvl["targets"][0]),
             })
 
-        rsb = run_mini_reverse_swings(bars, "B")
-        if rsb != "WAIT":
-            sl = current * (0.97 if rsb == "BUY" else 1.03)
-            mult = [1.03, 1.06, 1.09] if rsb == "BUY" else [0.97, 0.94, 0.91]
+        rsb_dir, rsb_lvl = run_mini_reverse_swings(bars, "B")
+        if rsb_dir != "WAIT" and rsb_lvl:
             signals.append({
-                "strategy": "Reverse Swings B", "direction": rsb,
-                "entry": round(current, 2), "stoploss": round(sl, 2),
-                "targets": [round(current * m, 2) for m in mult],
-                "confidence": 70,
-                "day_target": calc_day_target(rsb),
+                "strategy": "Reverse Swings B", "direction": rsb_dir,
+                "entry": json_safe_float(rsb_lvl["entry"]),
+                "stoploss": json_safe_float(rsb_lvl["sl"]),
+                "targets": [json_safe_float(t) for t in rsb_lvl["targets"]],
+                "confidence": 72,
+                "day_target": json_safe_float(rsb_lvl["targets"][0]),
             })
 
-        ev = run_mini_explosive_volume(bars)
-        if ev != "WAIT":
-            sl = current * 0.96
+        ev_dir, ev_lvl = run_mini_explosive_volume(bars)
+        if ev_dir != "WAIT" and ev_lvl:
             signals.append({
-                "strategy": "Explosive Volume", "direction": ev,
-                "entry": round(current, 2), "stoploss": round(sl, 2),
-                "targets": [round(current * 1.05, 2), round(current * 1.10, 2), round(current * 1.18, 2)],
-                "confidence": 80,
-                "day_target": calc_day_target(ev),
-            })
-
-        gs = run_mini_golden_setup(bars)
-        if gs != "WAIT":
-            sl = current * (0.96 if gs == "BUY" else 1.04)
-            mult = [1.04, 1.08, 1.12] if gs == "BUY" else [0.96, 0.92, 0.88]
-            signals.append({
-                "strategy": "Golden Setup", "direction": gs,
-                "entry": round(current, 2), "stoploss": round(sl, 2),
-                "targets": [round(current * m, 2) for m in mult],
-                "confidence": 85,
-                "day_target": calc_day_target(gs),
-            })
-
-        ai_sig, ai_score = run_mini_ai_indicator(bars)
-        if ai_sig != "WAIT":
-            sl = current * (0.97 if ai_sig == "BUY" else 1.03)
-            mult = [1.04, 1.07, 1.11] if ai_sig == "BUY" else [0.96, 0.93, 0.89]
-            signals.append({
-                "strategy": f"AI Indicator ({ai_score})", "direction": ai_sig,
-                "entry": round(current, 2), "stoploss": round(sl, 2),
-                "targets": [round(current * m, 2) for m in mult],
-                "confidence": min(int(ai_score), 95),
-                "day_target": calc_day_target(ai_sig),
-            })
-
-        gz = run_mini_godzilla(bars)
-        if gz != "WAIT":
-            sl = current * (0.96 if gz == "BUY" else 1.04)
-            mult = [1.05, 1.10, 1.15] if gz == "BUY" else [0.95, 0.90, 0.85]
-            signals.append({
-                "strategy": "Godzilla TTE", "direction": gz,
-                "entry": round(current, 2), "stoploss": round(sl, 2),
-                "targets": [round(current * m, 2) for m in mult],
+                "strategy": "Explosive Volume", "direction": ev_dir,
+                "entry": json_safe_float(ev_lvl["entry"]),
+                "stoploss": json_safe_float(ev_lvl["sl"]),
+                "targets": [json_safe_float(t) for t in ev_lvl["targets"]],
                 "confidence": 82,
-                "day_target": calc_day_target(gz),
+                "day_target": json_safe_float(ev_lvl["targets"][0]),
+            })
+
+        gs_dir, gs_lvl = run_mini_golden_setup(bars)
+        if gs_dir != "WAIT" and gs_lvl:
+            signals.append({
+                "strategy": "Golden Setup", "direction": gs_dir,
+                "entry": json_safe_float(gs_lvl["entry"]),
+                "stoploss": json_safe_float(gs_lvl["sl"]),
+                "targets": [json_safe_float(t) for t in gs_lvl["targets"]],
+                "confidence": 85,
+                "day_target": json_safe_float(gs_lvl["targets"][0]),
+            })
+
+        ai_result = run_mini_ai_indicator(bars)
+        ai_dir = ai_result[0]
+        ai_lvl = ai_result[1] if len(ai_result) > 1 else None
+        ai_score = ai_result[2] if len(ai_result) > 2 else 50
+        if ai_dir != "WAIT" and ai_lvl:
+            signals.append({
+                "strategy": f"AI Indicator ({ai_score})", "direction": ai_dir,
+                "entry": json_safe_float(ai_lvl["entry"]),
+                "stoploss": json_safe_float(ai_lvl["sl"]),
+                "targets": [json_safe_float(t) for t in ai_lvl["targets"]],
+                "confidence": min(int(ai_score), 95),
+                "day_target": json_safe_float(ai_lvl["targets"][0]),
+            })
+
+        gz_dir, gz_lvl = run_mini_godzilla(bars)
+        if gz_dir != "WAIT" and gz_lvl:
+            signals.append({
+                "strategy": "Godzilla TTE", "direction": gz_dir,
+                "entry": json_safe_float(gz_lvl["entry"]),
+                "stoploss": json_safe_float(gz_lvl["sl"]),
+                "targets": [json_safe_float(t) for t in gz_lvl["targets"]],
+                "confidence": 83,
+                "day_target": json_safe_float(gz_lvl["targets"][0]),
             })
 
         # DEMON confluence
