@@ -1,10 +1,71 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, MagnifyingGlass, TrendUp, TrendDown, Lightning, SortAscending, SortDescending, DownloadSimple } from '@phosphor-icons/react';
+import { X, MagnifyingGlass, TrendUp, TrendDown, Lightning, SortAscending, SortDescending, DownloadSimple, WhatsappLogo, TelegramLogo } from '@phosphor-icons/react';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const CAP_COLORS = { large: '#60A5FA', mid: '#FBBF24', small: '#4ADE80' };
 const DIR_COLOR  = { BUY: '#00E676', SELL: '#FF3B30' };
+
+// ---- Export helpers ----
+const _todayStr = () => new Date().toISOString().slice(0, 10);
+
+const _csvEscape = (v) => {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+const buildCsv = (rows) => {
+  const headers = ['Ticker', 'Name', 'Cap', 'Signal', 'Price', 'Entry', 'StopLoss', 'Target', 'Confidence', 'Strategies'];
+  const lines = [headers.join(',')];
+  rows.forEach(r => {
+    lines.push([
+      r.ticker, r.name, r.cap, r.best_direction,
+      r.current_price, r.best_entry, r.best_sl, r.best_target,
+      `${r.best_confidence}%`, (r.strategies || []).join(' | '),
+    ].map(_csvEscape).join(','));
+  });
+  return lines.join('\n');
+};
+
+const downloadCsv = (rows) => {
+  const csv = buildCsv(rows);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `stock-finder-${_todayStr()}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
+const buildShareText = (rows, { bmpOnly = false } = {}) => {
+  const top = rows.slice(0, 15);
+  // BMP-only chars for WhatsApp (wa.me redirect breaks surrogate-pair emojis)
+  const hdr  = bmpOnly ? '\u25C6' : '\uD83D\uDCCA';                       // ◆ vs 📊
+  const buy  = bmpOnly ? '\u25B2' : '\uD83D\uDFE2';                       // ▲ vs 🟢
+  const sell = bmpOnly ? '\u25BC' : '\uD83D\uDD34';                       // ▼ vs 🔴
+  const head = `${hdr} *Gann Trader \u2014 Stock Finder*\n${_todayStr()} \u00B7 ${rows.length} setups\n`;
+  const lines = top.map((r, i) => {
+    const dir = r.best_direction === 'BUY' ? buy : sell;
+    const sym = r.ticker.replace('.NS', '').replace('.BO', '');
+    return `${i + 1}. ${dir} ${sym} (${r.best_direction})\n   Entry \u20B9${r.best_entry} \u00B7 SL \u20B9${r.best_sl} \u00B7 TGT \u20B9${r.best_target} \u00B7 ${r.best_confidence}%`;
+  });
+  const footer = rows.length > top.length ? `\n\u2026+${rows.length - top.length} more` : '';
+  return `${head}\n${lines.join('\n')}${footer}`;
+};
+
+const shareWhatsApp = (rows) => {
+  const text = encodeURIComponent(buildShareText(rows, { bmpOnly: true }));
+  window.open(`https://wa.me/?text=${text}`, '_blank', 'noopener,noreferrer');
+};
+
+const shareTelegram = (rows) => {
+  const text = encodeURIComponent(buildShareText(rows));
+  window.open(`https://t.me/share/url?url=https://emergent.sh&text=${text}`, '_blank', 'noopener,noreferrer');
+};
 
 // Animated progress bar
 const ProgressBar = ({ current, total, symbol }) => {
@@ -393,15 +454,52 @@ const StockFinderModal = ({ onClose, onStockSelect }) => {
         </div>
 
         {/* Footer */}
-        <div className="px-4 py-2.5 border-t border-white/8 shrink-0 flex items-center justify-between">
+        <div className="px-4 py-2.5 border-t border-white/8 shrink-0 flex items-center justify-between gap-3 flex-wrap">
           <p className="text-[9px] text-zinc-700">
             Click any row to open chart • Live NSE data • Mini strategies only
           </p>
-          {done && results.length > 0 && (
-            <span className="text-[9px] text-zinc-600">
-              Scan complete — {results.length}/{progress.total} stocks ne signal diya
-            </span>
-          )}
+
+          <div className="flex items-center gap-2">
+            {done && results.length > 0 && (
+              <span className="text-[9px] text-zinc-600 mr-1">
+                {results.length}/{progress.total} stocks · {filtered.length} shown
+              </span>
+            )}
+
+            {/* Export / Share buttons */}
+            <button
+              onClick={() => downloadCsv(filtered)}
+              disabled={filtered.length === 0}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-white/[0.05] text-zinc-300 hover:bg-white/10 hover:text-white border border-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              data-testid="export-csv"
+              title="Download as CSV"
+            >
+              <DownloadSimple size={11} weight="bold" />
+              CSV
+            </button>
+
+            <button
+              onClick={() => shareWhatsApp(filtered)}
+              disabled={filtered.length === 0}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-[#25D366]/15 text-[#25D366] hover:bg-[#25D366]/25 border border-[#25D366]/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              data-testid="share-whatsapp"
+              title="Share top setups on WhatsApp"
+            >
+              <WhatsappLogo size={11} weight="bold" />
+              WhatsApp
+            </button>
+
+            <button
+              onClick={() => shareTelegram(filtered)}
+              disabled={filtered.length === 0}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-[#229ED9]/15 text-[#229ED9] hover:bg-[#229ED9]/25 border border-[#229ED9]/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              data-testid="share-telegram"
+              title="Share top setups on Telegram"
+            >
+              <TelegramLogo size={11} weight="bold" />
+              Telegram
+            </button>
+          </div>
         </div>
       </div>
     </div>
