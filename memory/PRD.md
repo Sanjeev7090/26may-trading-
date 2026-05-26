@@ -153,5 +153,26 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - **Files**: `/app/backend/server.py` (lines 5390-5705: universe + SSE endpoint + `_scan_stock_for_finder`), `/app/frontend/src/components/StockFinderModal.jsx` (470+ lines), `/app/frontend/src/components/AutoScanner.jsx` (Finder button + modal wiring).
 - **Tests**: `/app/backend/tests/test_stock_finder.py` — 11/11 PASSED (iteration_7).
 
-### ChartPanel priceLines fix (Feb 2026)
+### Multi-Timeframe + Multi-Asset Scanner (Feb 2026)
+- **New "Multi-TF" button** in AutoScanner header (alongside Finder)
+- **Segments**: All | F&O (~50 Nifty50 stocks) | Indices (^NSEI, ^NSEBANK, ^NSEMDCP50, NIFTYNXT50) | BankNifty (8 stocks) | FinNifty (7 stocks) | Midcap (30 stocks) | Cash (10 stocks)
+- **Timeframes**: 15 Min / 1 Hour / Daily (any combination selectable)
+- **MTF Confluence**: dots showing how many TFs agree on same direction (e.g. 3/3)
+- **Per-TF weighted score**: each strategy has a weight (Godzilla 22%, SMC 20%, MiroFish 18%, ExpVol 12%, etc.)
+- **Results table**: sortable by price/confluence/score/direction, direction filter ALL/BUY/SELL, in-table search, CSV export
+- **Click row**: closes modal + loads chart for selected stock
+- **Backend endpoint**: `GET /api/multi-tf-scanner/scan?segment={segment}&timeframes={15m,1h,1d}` — SSE streaming
+- **File**: `/app/frontend/src/components/MultiTFScannerModal.jsx`
+
+### Weighted Confluence Scoring (Feb 2026)
+- **Strategy weights** defined in `_STRATEGY_WEIGHTS` dict in `server.py`:
+  - Godzilla TTE: 22%, SMC: 20%, MiroFish: 18%, Explosive Volume: 12%
+  - Falling Knife: 8%, AI Indicator: 8%, DEMON: 5%
+  - Golden Setup: 3%, Reverse Swings: 3%, AMDS: 3%, PAC+S&O: 3%, Narrative Swing: 3%
+- **Formula**: `weighted_sum = Σ(strategy_weight × (0.6 + 0.4 × confidence/100))` for aligned signals
+- **Score**: `min(weighted_sum / 108 × 100, 100)` → labels WEAK/MODERATE/STRONG/VERY STRONG/EXTREME
+- **Applied to**: `/api/auto-scan/{ticker}` and MTF scanner
+- **Helper**: `_calc_weighted_confluence(signals)` returns (score, label, direction, aligned_count)
+
+
 - Migrated `TimeframeLevels` from deprecated `chart.addPriceLine()` → `series.createPriceLine()` (proper lightweight-charts v4 API). ChartPanel now passes `candlestickSeriesRef.current` instead of `chartRef.current`. Eliminates the recurring `TypeError: chart.addPriceLine is not a function` console error.

@@ -401,7 +401,7 @@ const MultiTFScannerModal = ({ onClose, onStockSelect }) => {
             <span className="text-[9px] text-zinc-500">{filtered.length} results</span>
             <span className="text-[9px] text-emerald-400 font-bold">{buyCount} BUY</span>
             <span className="text-[9px] text-red-400 font-bold">{sellCount} SELL</span>
-            <span className="text-[9px] text-[#00E676] font-bold">{fullConf} full confluence</span>
+            <span className="text-[9px] text-[#00E676] font-bold">{fullConf} full-TF aligned</span>
 
             {/* Direction filter */}
             <div className="flex items-center gap-1 ml-auto">
