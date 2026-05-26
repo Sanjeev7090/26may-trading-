@@ -12,8 +12,8 @@ const strategies = [
   { id: 'golden_setup', label: 'Golden', color: '#F5A623' },
   { id: 'reverse_swings', label: 'R.Swings', color: '#A855F7' },
   { id: 'godzilla', label: 'Godzilla', color: '#FF0055' },
-  { id: 'demon', label: 'DEMON', color: '#007AFF' },
   { id: 'smc', label: 'SMC', color: '#00E676' },
+  { id: 'demon', label: 'DEMON', color: '#007AFF' },
   { id: 'amds', label: 'AMDS', color: '#06B6D4' },
   { id: 'narrative_swing', label: 'Narrative', color: '#A78BFA' },
 ];

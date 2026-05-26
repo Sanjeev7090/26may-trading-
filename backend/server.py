@@ -4634,6 +4634,8 @@ async def analyze_amds(request: AMDSAnalysisRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
 class DemonRequest(BaseModel):
     ticker: str
     bars: List[dict]
@@ -5037,174 +5039,10 @@ def run_mini_godzilla(bars):
         return "WAIT", None
 
 
-@api_router.post("/demon/analyze", response_model=DemonResponse)
-async def analyze_demon(request: DemonRequest):
-    """DEMON - Multi-Strategy Confluence Analyzer"""
-    try:
-        bars = request.bars
-        if len(bars) < 30:
-            raise HTTPException(status_code=400, detail="Need at least 30 bars")
-
-        closes = [b['close'] for b in bars]
-        current = closes[-1]
-
-        # Run all strategies
-        fk_signal = run_mini_falling_knife(bars)
-        rsa_signal = run_mini_reverse_swings(bars, "A")
-        rsb_signal = run_mini_reverse_swings(bars, "B")
-        ev_signal = run_mini_explosive_volume(bars)
-        gs_signal = run_mini_golden_setup(bars)
-        ai_signal, ai_score = run_mini_ai_indicator(bars)
-        gz_signal = run_mini_godzilla(bars)
-
-        strategies = {
-            "falling_knife": {"signal": fk_signal, "name": "Falling Knife", "weight": 1},
-            "reverse_swings_a": {"signal": rsa_signal, "name": "Reverse Swings A", "weight": 1},
-            "reverse_swings_b": {"signal": rsb_signal, "name": "Reverse Swings B", "weight": 1},
-            "explosive_volume": {"signal": ev_signal, "name": "Explosive Volume", "weight": 1.2},
-            "golden_setup": {"signal": gs_signal, "name": "Golden Setup", "weight": 1.5},
-            "ai_indicator": {"signal": ai_signal, "name": f"AI Indicator ({ai_score})", "weight": 1.3},
-            "godzilla": {"signal": gz_signal, "name": "Godzilla TTE", "weight": 1.2},
-        }
-
-        buy_count = sum(1 for s in strategies.values() if s["signal"] == "BUY")
-        sell_count = sum(1 for s in strategies.values() if s["signal"] == "SELL")
-        wait_count = sum(1 for s in strategies.values() if s["signal"] == "WAIT")
-        total = len(strategies)
-
-        # Weighted confidence
-        buy_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "BUY")
-        sell_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "SELL")
-        total_weight = sum(s["weight"] for s in strategies.values())
-        buy_pct = (buy_weight / total_weight) * 100 if total_weight > 0 else 0
-        sell_pct = (sell_weight / total_weight) * 100 if total_weight > 0 else 0
-
-        confluence = []
-        buy_names = [s["name"] for s in strategies.values() if s["signal"] == "BUY"]
-        sell_names = [s["name"] for s in strategies.values() if s["signal"] == "SELL"]
-
-        if buy_count >= 4:
-            verdict = "DEMON BUY"
-            signal_type = "BUY"
-            confidence = buy_pct
-            confluence.append(f"{buy_count}/{total} strategies say BUY")
-            confluence.append(f"Agreeing: {', '.join(buy_names)}")
-            # Aggregate entry/sl/targets from consensus
-            sl = current * 0.95
-            t1 = current * 1.05
-            t2 = current * 1.10
-            t3 = current * 1.15
-            rec = (f"DEMON BUY! {buy_count}/{total} strategies confirm LONG. "
-                   f"Confluence: {', '.join(buy_names)}. "
-                   f"Weighted confidence {confidence:.0f}%. "
-                   f"Entry ₹{current:.2f}, SL ₹{sl:.2f} (5%), Targets T1 ₹{t1:.2f}, T2 ₹{t2:.2f}, T3 ₹{t3:.2f}.")
-        elif sell_count >= 4:
-            verdict = "DEMON SELL"
-            signal_type = "SELL"
-            confidence = sell_pct
-            confluence.append(f"{sell_count}/{total} strategies say SELL")
-            confluence.append(f"Agreeing: {', '.join(sell_names)}")
-            sl = current * 1.05
-            t1 = current * 0.95
-            t2 = current * 0.90
-            t3 = current * 0.85
-            rec = (f"DEMON SELL! {sell_count}/{total} strategies confirm SHORT. "
-                   f"Confluence: {', '.join(sell_names)}. "
-                   f"Weighted confidence {confidence:.0f}%. "
-                   f"Entry ₹{current:.2f}, SL ₹{sl:.2f} (5%), Targets T1 ₹{t1:.2f}, T2 ₹{t2:.2f}, T3 ₹{t3:.2f}.")
-        elif buy_count >= 3:
-            verdict = "LEANING BUY"
-            signal_type = "BUY"
-            confidence = buy_pct
-            confluence.append(f"{buy_count}/{total} strategies say BUY")
-            confluence.append(f"Agreeing: {', '.join(buy_names)}")
-            sl = current * 0.95
-            t1 = current * 1.04
-            t2 = current * 1.08
-            rec = (f"Leaning BUY. {buy_count}/{total} strategies aligned. "
-                   f"Not full confluence yet. {', '.join(buy_names)} agree. "
-                   f"Tentative entry ₹{current:.2f}, SL ₹{sl:.2f}.")
-            t3 = None
-        elif sell_count >= 3:
-            verdict = "LEANING SELL"
-            signal_type = "SELL"
-            confidence = sell_pct
-            confluence.append(f"{sell_count}/{total} strategies say SELL")
-            confluence.append(f"Agreeing: {', '.join(sell_names)}")
-            sl = current * 1.05
-            t1 = current * 0.96
-            t2 = current * 0.92
-            rec = (f"Leaning SELL. {sell_count}/{total} strategies aligned. "
-                   f"Not full confluence yet. {', '.join(sell_names)} agree. "
-                   f"Tentative entry ₹{current:.2f}, SL ₹{sl:.2f}.")
-            t3 = None
-        elif buy_count >= 2 or sell_count >= 2:
-            verdict = "MIXED"
-            signal_type = "WAIT"
-            confidence = max(buy_pct, sell_pct)
-            confluence.append(f"BUY: {buy_count}, SELL: {sell_count}, WAIT: {wait_count}")
-            if buy_names:
-                confluence.append(f"Bullish: {', '.join(buy_names)}")
-            if sell_names:
-                confluence.append(f"Bearish: {', '.join(sell_names)}")
-            sl = None
-            t1 = None
-            t2 = None
-            t3 = None
-            rec = (f"Mixed signals. {buy_count} BUY vs {sell_count} SELL. "
-                   f"No clear confluence. Wait for more agreement between strategies.")
-        else:
-            verdict = "NO SIGNAL"
-            signal_type = "WAIT"
-            confidence = 0
-            confluence.append(f"No confluence: {wait_count}/{total} strategies in WAIT")
-            sl = None
-            t1 = None
-            t2 = None
-            t3 = None
-            rec = f"No confluence detected. {wait_count}/{total} strategies neutral. Market conditions unclear. Stay on sidelines."
-
-        targets = None
-        if t1 is not None:
-            targets = [f"{t1:.2f}"]
-            if t2 is not None:
-                targets.append(f"{t2:.2f}")
-            if t3 is not None:
-                targets.append(f"{t3:.2f}")
-
-        strategy_signals = {}
-        for key, s in strategies.items():
-            strategy_signals[key] = {
-                "name": s["name"],
-                "signal": s["signal"],
-                "weight": s["weight"]
-            }
-
-        return DemonResponse(
-            verdict=verdict,
-            signal_type=signal_type,
-            confidence=round(confidence, 1),
-            buy_count=buy_count,
-            sell_count=sell_count,
-            wait_count=wait_count,
-            total_strategies=total,
-            strategy_signals=strategy_signals,
-            entry_price=f"{current:.2f}" if signal_type != "WAIT" else None,
-            stop_loss=f"{sl:.2f}" if sl else None,
-            targets=targets,
-            confluence_details=confluence,
-            recommendation=rec
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Error in demon analysis: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================
-# GHOST MODE - Auto Scanner for Indian Stocks using DEMON logic
+# GHOST MODE - Auto Scanner for Indian Stocks (Multi-Strategy Confluence)
 # ============================================================
 
 GHOST_SCAN_STOCKS = [
@@ -5287,100 +5125,232 @@ def run_demon_on_bars(bars):
     """Run DEMON confluence on raw bar dicts, returns result dict"""
     if len(bars) < 30:
         return None
-    
+
     closes = [b['close'] for b in bars]
     current = closes[-1]
 
-    fk_signal = run_mini_falling_knife(bars)
+    fk_signal  = run_mini_falling_knife(bars)
     rsa_signal = run_mini_reverse_swings(bars, "A")
     rsb_signal = run_mini_reverse_swings(bars, "B")
-    ev_signal = run_mini_explosive_volume(bars)
-    gs_signal = run_mini_golden_setup(bars)
+    ev_signal  = run_mini_explosive_volume(bars)
+    gs_signal  = run_mini_golden_setup(bars)
     ai_signal, ai_score = run_mini_ai_indicator(bars)
-    gz_signal = run_mini_godzilla(bars)
+    gz_signal  = run_mini_godzilla(bars)
 
     strategies = {
-        "falling_knife": {"signal": fk_signal, "name": "Falling Knife", "weight": 1},
-        "reverse_swings_a": {"signal": rsa_signal, "name": "Reverse Swings A", "weight": 1},
-        "reverse_swings_b": {"signal": rsb_signal, "name": "Reverse Swings B", "weight": 1},
-        "explosive_volume": {"signal": ev_signal, "name": "Explosive Volume", "weight": 1.2},
-        "golden_setup": {"signal": gs_signal, "name": "Golden Setup", "weight": 1.5},
-        "ai_indicator": {"signal": ai_signal, "name": f"AI Indicator ({ai_score})", "weight": 1.3},
-        "godzilla": {"signal": gz_signal, "name": "Godzilla TTE", "weight": 1.2},
+        "falling_knife":    {"signal": fk_signal,  "name": "Falling Knife",             "weight": 1},
+        "reverse_swings_a": {"signal": rsa_signal, "name": "Reverse Swings A",          "weight": 1},
+        "reverse_swings_b": {"signal": rsb_signal, "name": "Reverse Swings B",          "weight": 1},
+        "explosive_volume": {"signal": ev_signal,  "name": "Explosive Volume",          "weight": 1.2},
+        "golden_setup":     {"signal": gs_signal,  "name": "Golden Setup",              "weight": 1.5},
+        "ai_indicator":     {"signal": ai_signal,  "name": f"AI Indicator ({ai_score})", "weight": 1.3},
+        "godzilla":         {"signal": gz_signal,  "name": "Godzilla TTE",              "weight": 1.2},
     }
 
-    # Hybrid VWAP+TWAP (lightweight — add to confluence)
-    try:
-        vwap_dir, _ = run_mini_hybrid_vwap(bars)
-        strategies["hybrid_vwap"] = {"signal": vwap_dir, "name": "Hybrid VWAP+TWAP", "weight": 0.8}
-    except Exception:
-        pass
-
-    buy_count = sum(1 for s in strategies.values() if s["signal"] == "BUY")
+    buy_count  = sum(1 for s in strategies.values() if s["signal"] == "BUY")
     sell_count = sum(1 for s in strategies.values() if s["signal"] == "SELL")
-    total = len(strategies)
+    total      = len(strategies)
 
-    buy_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "BUY")
+    buy_weight  = sum(s["weight"] for s in strategies.values() if s["signal"] == "BUY")
     sell_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "SELL")
-    total_weight = sum(s["weight"] for s in strategies.values())
-    buy_pct = (buy_weight / total_weight) * 100 if total_weight > 0 else 0
-    sell_pct = (sell_weight / total_weight) * 100 if total_weight > 0 else 0
+    total_wt    = sum(s["weight"] for s in strategies.values())
+    buy_pct     = (buy_weight  / total_wt) * 100 if total_wt > 0 else 0
+    sell_pct    = (sell_weight / total_wt) * 100 if total_wt > 0 else 0
 
     if buy_count >= 4:
-        verdict = "DEMON BUY"
-        signal_type = "BUY"
-        confidence = buy_pct
-        sl = current * 0.95
-        t1, t2, t3 = current * 1.05, current * 1.10, current * 1.15
+        verdict = "DEMON BUY"; signal_type = "BUY";  confidence = buy_pct
+        sl = current * 0.95; t1, t2, t3 = current * 1.05, current * 1.10, current * 1.15
     elif sell_count >= 4:
-        verdict = "DEMON SELL"
-        signal_type = "SELL"
-        confidence = sell_pct
-        sl = current * 1.05
-        t1, t2, t3 = current * 0.95, current * 0.90, current * 0.85
+        verdict = "DEMON SELL"; signal_type = "SELL"; confidence = sell_pct
+        sl = current * 1.05; t1, t2, t3 = current * 0.95, current * 0.90, current * 0.85
     elif buy_count >= 3:
-        verdict = "LEANING BUY"
-        signal_type = "BUY"
-        confidence = buy_pct
-        sl = current * 0.95
-        t1, t2, t3 = current * 1.04, current * 1.08, None
+        verdict = "LEANING BUY"; signal_type = "BUY"; confidence = buy_pct
+        sl = current * 0.95; t1, t2, t3 = current * 1.04, current * 1.08, None
     elif sell_count >= 3:
-        verdict = "LEANING SELL"
-        signal_type = "SELL"
-        confidence = sell_pct
-        sl = current * 1.05
-        t1, t2, t3 = current * 0.96, current * 0.92, None
+        verdict = "LEANING SELL"; signal_type = "SELL"; confidence = sell_pct
+        sl = current * 1.05; t1, t2, t3 = current * 0.96, current * 0.92, None
     else:
         verdict = "MIXED" if (buy_count >= 2 or sell_count >= 2) else "NO SIGNAL"
-        signal_type = "WAIT"
-        confidence = max(buy_pct, sell_pct)
+        signal_type = "WAIT"; confidence = max(buy_pct, sell_pct)
         sl = t1 = t2 = t3 = None
 
     targets = None
     if t1 is not None:
         targets = [f"{t1:.2f}"]
-        if t2 is not None:
-            targets.append(f"{t2:.2f}")
-        if t3 is not None:
-            targets.append(f"{t3:.2f}")
+        if t2 is not None: targets.append(f"{t2:.2f}")
+        if t3 is not None: targets.append(f"{t3:.2f}")
 
-    strategy_signals = {}
-    for key, s in strategies.items():
-        strategy_signals[key] = {"name": s["name"], "signal": s["signal"], "weight": s["weight"]}
+    strategy_signals = {k: {"name": s["name"], "signal": s["signal"], "weight": s["weight"]}
+                        for k, s in strategies.items()}
 
     return {
-        "verdict": verdict,
-        "signal_type": signal_type,
-        "confidence": round(confidence, 1),
-        "buy_count": buy_count,
-        "sell_count": sell_count,
+        "verdict":          verdict,
+        "signal_type":      signal_type,
+        "confidence":       round(confidence, 1),
+        "buy_count":        buy_count,
+        "sell_count":       sell_count,
         "total_strategies": total,
-        "entry_price": f"{current:.2f}" if signal_type != "WAIT" else None,
-        "stop_loss": f"{sl:.2f}" if sl else None,
-        "targets": targets,
+        "entry_price":      f"{current:.2f}" if signal_type != "WAIT" else None,
+        "stop_loss":        f"{sl:.2f}"       if sl               else None,
+        "targets":          targets,
         "strategy_signals": strategy_signals,
-        "current_price": current,
+        "current_price":    current,
     }
+
+
+@api_router.post("/demon/analyze", response_model=DemonResponse)
+async def analyze_demon(request: DemonRequest):
+    """DEMON - Multi-Strategy Confluence Analyzer"""
+    try:
+        bars = request.bars
+        if len(bars) < 30:
+            raise HTTPException(status_code=400, detail="Need at least 30 bars")
+
+        result = run_demon_on_bars(bars)
+        if result is None:
+            raise HTTPException(status_code=400, detail="Insufficient bar data")
+
+        closes  = [b['close'] for b in bars]
+        current = closes[-1]
+        strategies = result["strategy_signals"]
+        buy_names  = [s["name"] for s in strategies.values() if s["signal"] == "BUY"]
+        sell_names = [s["name"] for s in strategies.values() if s["signal"] == "SELL"]
+        buy_count  = result["buy_count"]
+        sell_count = result["sell_count"]
+        total      = result["total_strategies"]
+        verdict    = result["verdict"]
+        signal_type= result["signal_type"]
+        confidence = result["confidence"]
+
+        confluence = []
+        if signal_type != "WAIT":
+            aligned = buy_names if signal_type == "BUY" else sell_names
+            cnt     = buy_count  if signal_type == "BUY" else sell_count
+            confluence.append(f"{cnt}/{total} strategies say {signal_type}")
+            confluence.append(f"Agreeing: {', '.join(aligned)}")
+        else:
+            confluence.append(f"BUY: {buy_count}, SELL: {sell_count}")
+
+        sl_str = result.get("stop_loss")
+        t_list = result.get("targets") or []
+        t1_val = float(t_list[0]) if t_list else None
+        t2_val = float(t_list[1]) if len(t_list) > 1 else None
+        t3_val = float(t_list[2]) if len(t_list) > 2 else None
+
+        if signal_type == "BUY":
+            rec = (f"{verdict}! {buy_count}/{total} strategies confirm LONG. "
+                   f"Confluence: {', '.join(buy_names)}. "
+                   f"Weighted confidence {confidence:.0f}%. "
+                   f"Entry ₹{current:.2f}. SL ₹{sl_str}. T1 ₹{t1_val}.")
+        elif signal_type == "SELL":
+            rec = (f"{verdict}! {sell_count}/{total} strategies confirm SHORT. "
+                   f"Confluence: {', '.join(sell_names)}. "
+                   f"Weighted confidence {confidence:.0f}%. "
+                   f"Entry ₹{current:.2f}. SL ₹{sl_str}. T1 ₹{t1_val}.")
+        else:
+            rec = (f"No DEMON confluence. {buy_count} BUY vs {sell_count} SELL. "
+                   f"Wait for strategy agreement.")
+
+        return DemonResponse(
+            verdict=verdict,
+            signal_type=signal_type,
+            confidence=confidence,
+            buy_count=buy_count,
+            sell_count=sell_count,
+            wait_count=total - buy_count - sell_count,
+            total_strategies=total,
+            strategy_signals=strategies,
+            entry_price=f"{current:.2f}" if signal_type != "WAIT" else None,
+            stop_loss=sl_str,
+            targets=t_list if t_list else None,
+            confluence_details=confluence,
+            recommendation=rec,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error in demon analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# GHOST MODE - Auto Scanner for Indian Stocks (Multi-Strategy Confluence)
+# ============================================================
+    """Multi-strategy confluence runner for Ghost Mode scanner."""
+    if len(bars) < 30:
+        return None
+
+    closes = [b['close'] for b in bars]
+    current = closes[-1]
+
+    fk_signal  = run_mini_falling_knife(bars)
+    rsa_signal = run_mini_reverse_swings(bars, "A")
+    rsb_signal = run_mini_reverse_swings(bars, "B")
+    ev_signal  = run_mini_explosive_volume(bars)
+    gs_signal  = run_mini_golden_setup(bars)
+    ai_signal, ai_score = run_mini_ai_indicator(bars)
+    gz_signal  = run_mini_godzilla(bars)
+
+    strategies = {
+        "falling_knife":    {"signal": fk_signal,  "name": "Falling Knife",        "weight": 1.0},
+        "reverse_swings_a": {"signal": rsa_signal, "name": "Reverse Swings A",     "weight": 1.0},
+        "reverse_swings_b": {"signal": rsb_signal, "name": "Reverse Swings B",     "weight": 1.0},
+        "explosive_volume": {"signal": ev_signal,  "name": "Explosive Volume",     "weight": 1.2},
+        "golden_setup":     {"signal": gs_signal,  "name": "Golden Setup",         "weight": 1.5},
+        "ai_indicator":     {"signal": ai_signal,  "name": f"AI Indicator ({ai_score})", "weight": 1.3},
+        "godzilla":         {"signal": gz_signal,  "name": "Godzilla TTE",         "weight": 1.2},
+    }
+
+    buy_count  = sum(1 for s in strategies.values() if s["signal"] == "BUY")
+    sell_count = sum(1 for s in strategies.values() if s["signal"] == "SELL")
+    total      = len(strategies)
+
+    buy_weight  = sum(s["weight"] for s in strategies.values() if s["signal"] == "BUY")
+    sell_weight = sum(s["weight"] for s in strategies.values() if s["signal"] == "SELL")
+    total_wt    = sum(s["weight"] for s in strategies.values())
+    buy_pct     = (buy_weight  / total_wt) * 100 if total_wt > 0 else 0
+    sell_pct    = (sell_weight / total_wt) * 100 if total_wt > 0 else 0
+
+    if buy_count >= 4:
+        verdict = "STRONG BUY"; signal_type = "BUY";  confidence = buy_pct
+        sl = current * 0.95; t1, t2, t3 = current * 1.05, current * 1.10, current * 1.15
+    elif sell_count >= 4:
+        verdict = "STRONG SELL"; signal_type = "SELL"; confidence = sell_pct
+        sl = current * 1.05; t1, t2, t3 = current * 0.95, current * 0.90, current * 0.85
+    elif buy_count >= 3:
+        verdict = "LEANING BUY"; signal_type = "BUY";  confidence = buy_pct
+        sl = current * 0.95; t1, t2, t3 = current * 1.04, current * 1.08, None
+    elif sell_count >= 3:
+        verdict = "LEANING SELL"; signal_type = "SELL"; confidence = sell_pct
+        sl = current * 1.05; t1, t2, t3 = current * 0.96, current * 0.92, None
+    else:
+        verdict = "MIXED" if (buy_count >= 2 or sell_count >= 2) else "NO SIGNAL"
+        signal_type = "WAIT"; confidence = max(buy_pct, sell_pct)
+        sl = t1 = t2 = t3 = None
+
+    targets = None
+    if t1 is not None:
+        targets = [f"{t1:.2f}"]
+        if t2 is not None: targets.append(f"{t2:.2f}")
+        if t3 is not None: targets.append(f"{t3:.2f}")
+
+    strategy_signals = {k: {"name": s["name"], "signal": s["signal"], "weight": s["weight"]}
+                        for k, s in strategies.items()}
+
+    return {
+        "verdict":          verdict,
+        "signal_type":      signal_type,
+        "confidence":       round(confidence, 1),
+        "buy_count":        buy_count,
+        "sell_count":       sell_count,
+        "total_strategies": total,
+        "entry_price":      f"{current:.2f}" if signal_type != "WAIT" else None,
+        "stop_loss":        f"{sl:.2f}"       if sl               else None,
+        "targets":          targets,
+        "strategy_signals": strategy_signals,
+        "current_price":    current,
+    }
+
 
 
 def run_mini_hybrid_vwap(bars):
@@ -6140,21 +6110,6 @@ def _mtf_scan_stock(stock_meta: Dict, timeframes: list) -> Optional[Dict]:
             except Exception:
                 pass
 
-            try:
-                demon = run_demon_on_bars(bars)
-                if demon and demon.get("signal_type") != "WAIT":
-                    c = bars[-1]["close"]
-                    tf_signals.append({
-                        "strategy":   f"DEMON ({demon.get('verdict','')})",
-                        "direction":  demon["signal_type"],
-                        "entry":      _safe(c),
-                        "stoploss":   _safe(demon.get("stop_loss", c * 0.95)),
-                        "targets":    [_safe(t) for t in demon.get("targets", [c * 1.05])],
-                        "confidence": int(demon.get("confidence", 70)),
-                    })
-            except Exception:
-                pass
-
             # Weighted score for this TF
             buy_w  = sum(_get_strategy_weight(s["strategy"]) * (0.6 + 0.4 * s.get("confidence", 70) / 100)
                          for s in tf_signals if s["direction"] == "BUY")
@@ -6673,7 +6628,7 @@ async def auto_scan_ticker(ticker: str):
                 "day_target": json_safe_float(gz_lvl["targets"][0]),
             })
 
-        # DEMON confluence
+        # DEMON Confluence
         demon = run_demon_on_bars(bars)
         if demon and demon.get("signal_type") != "WAIT":
             signals.append({
@@ -6829,7 +6784,7 @@ async def auto_scan_ticker(ticker: str):
 
 @api_router.get("/ghost/scan", response_model=GhostScanResponse)
 async def ghost_scan(min_match: int = 3):
-    """Ghost Mode - Scan 50 Indian stocks with DEMON confluence logic"""
+    """Ghost Mode - Scan 50 Indian stocks with multi-strategy confluence"""
     try:
         results = []
         errors = 0

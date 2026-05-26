@@ -90,8 +90,8 @@ const MonteCarloSimulation = ({ ticker }) => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Strategies</SelectItem>
-                  <SelectItem value="demon">DEMON</SelectItem>
                   <SelectItem value="smc">SMC</SelectItem>
+                  <SelectItem value="demon">DEMON</SelectItem>
                   <SelectItem value="falling_knife">Falling Knife</SelectItem>
                   <SelectItem value="golden_setup">Golden Setup</SelectItem>
                   <SelectItem value="reverse_swings">Reverse Swings</SelectItem>
