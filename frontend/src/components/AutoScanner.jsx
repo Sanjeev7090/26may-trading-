@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Lightning, Bell, X, TrendUp, TrendDown, Play, Pause, SpeakerHigh, CurrencyInr } from '@phosphor-icons/react';
+import { Lightning, Bell, X, TrendUp, TrendDown, Play, Pause, SpeakerHigh, CurrencyInr, Binoculars } from '@phosphor-icons/react';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 

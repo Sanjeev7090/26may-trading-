@@ -5412,6 +5412,299 @@ Return ONLY valid JSON:
     return parsed
 
 
+# ======================= STOCK FINDER =======================
+
+_STOCK_FINDER_UNIVERSE = [
+    # --- Large Cap / NIFTY 50 ---
+    {"ticker": "RELIANCE.NS",   "name": "Reliance Industries",      "cap": "large"},
+    {"ticker": "TCS.NS",        "name": "TCS",                      "cap": "large"},
+    {"ticker": "HDFCBANK.NS",   "name": "HDFC Bank",                "cap": "large"},
+    {"ticker": "ICICIBANK.NS",  "name": "ICICI Bank",               "cap": "large"},
+    {"ticker": "INFY.NS",       "name": "Infosys",                  "cap": "large"},
+    {"ticker": "BHARTIARTL.NS", "name": "Bharti Airtel",            "cap": "large"},
+    {"ticker": "ITC.NS",        "name": "ITC",                      "cap": "large"},
+    {"ticker": "BAJFINANCE.NS", "name": "Bajaj Finance",            "cap": "large"},
+    {"ticker": "LT.NS",         "name": "L&T",                      "cap": "large"},
+    {"ticker": "KOTAKBANK.NS",  "name": "Kotak Bank",               "cap": "large"},
+    {"ticker": "AXISBANK.NS",   "name": "Axis Bank",                "cap": "large"},
+    {"ticker": "HCLTECH.NS",    "name": "HCL Technologies",         "cap": "large"},
+    {"ticker": "WIPRO.NS",      "name": "Wipro",                    "cap": "large"},
+    {"ticker": "MARUTI.NS",     "name": "Maruti Suzuki",            "cap": "large"},
+    {"ticker": "SBIN.NS",       "name": "State Bank of India",      "cap": "large"},
+    {"ticker": "ADANIENT.NS",   "name": "Adani Enterprises",        "cap": "large"},
+    {"ticker": "TATAMOTORS.NS", "name": "Tata Motors",              "cap": "large"},
+    {"ticker": "SUNPHARMA.NS",  "name": "Sun Pharma",               "cap": "large"},
+    {"ticker": "TITAN.NS",      "name": "Titan Company",            "cap": "large"},
+    {"ticker": "NTPC.NS",       "name": "NTPC",                     "cap": "large"},
+    {"ticker": "ONGC.NS",       "name": "ONGC",                     "cap": "large"},
+    {"ticker": "COALINDIA.NS",  "name": "Coal India",               "cap": "large"},
+    {"ticker": "TATASTEEL.NS",  "name": "Tata Steel",               "cap": "large"},
+    {"ticker": "DRREDDY.NS",    "name": "Dr. Reddy's",              "cap": "large"},
+    {"ticker": "CIPLA.NS",      "name": "Cipla",                    "cap": "large"},
+    {"ticker": "BAJAJ-AUTO.NS", "name": "Bajaj Auto",               "cap": "large"},
+    {"ticker": "EICHERMOT.NS",  "name": "Eicher Motors",            "cap": "large"},
+    {"ticker": "HEROMOTOCO.NS", "name": "Hero MotoCorp",            "cap": "large"},
+    {"ticker": "HINDALCO.NS",   "name": "Hindalco",                 "cap": "large"},
+    {"ticker": "ASIANPAINT.NS", "name": "Asian Paints",             "cap": "large"},
+    {"ticker": "ULTRACEMCO.NS", "name": "UltraTech Cement",         "cap": "large"},
+    {"ticker": "GRASIM.NS",     "name": "Grasim Industries",        "cap": "large"},
+    {"ticker": "INDUSINDBK.NS", "name": "IndusInd Bank",            "cap": "large"},
+    {"ticker": "APOLLOHOSP.NS", "name": "Apollo Hospitals",         "cap": "large"},
+    {"ticker": "JSWSTEEL.NS",   "name": "JSW Steel",                "cap": "large"},
+    {"ticker": "POWERGRID.NS",  "name": "Power Grid",               "cap": "large"},
+    {"ticker": "BPCL.NS",       "name": "BPCL",                     "cap": "large"},
+    {"ticker": "TATACONSUM.NS", "name": "Tata Consumer Products",   "cap": "large"},
+    {"ticker": "NESTLEIND.NS",  "name": "Nestle India",             "cap": "large"},
+    {"ticker": "BRITANNIA.NS",  "name": "Britannia Industries",     "cap": "large"},
+    # --- Mid Cap ---
+    {"ticker": "PERSISTENT.NS", "name": "Persistent Systems",       "cap": "mid"},
+    {"ticker": "COFORGE.NS",    "name": "Coforge",                  "cap": "mid"},
+    {"ticker": "MPHASIS.NS",    "name": "Mphasis",                  "cap": "mid"},
+    {"ticker": "LTIM.NS",       "name": "LTIMindtree",              "cap": "mid"},
+    {"ticker": "TRENT.NS",      "name": "Trent",                    "cap": "mid"},
+    {"ticker": "ASTRAL.NS",     "name": "Astral",                   "cap": "mid"},
+    {"ticker": "PIIND.NS",      "name": "PI Industries",            "cap": "mid"},
+    {"ticker": "DEEPAKNTR.NS",  "name": "Deepak Nitrite",           "cap": "mid"},
+    {"ticker": "HAVELLS.NS",    "name": "Havells India",            "cap": "mid"},
+    {"ticker": "VOLTAS.NS",     "name": "Voltas",                   "cap": "mid"},
+    {"ticker": "TORNTPHARM.NS", "name": "Torrent Pharma",           "cap": "mid"},
+    {"ticker": "LUPIN.NS",      "name": "Lupin",                    "cap": "mid"},
+    {"ticker": "AUROPHARMA.NS", "name": "Aurobindo Pharma",         "cap": "mid"},
+    {"ticker": "ALKEM.NS",      "name": "Alkem Laboratories",       "cap": "mid"},
+    {"ticker": "BIOCON.NS",     "name": "Biocon",                   "cap": "mid"},
+    {"ticker": "OBEROIRLTY.NS", "name": "Oberoi Realty",            "cap": "mid"},
+    {"ticker": "GODREJPROP.NS", "name": "Godrej Properties",        "cap": "mid"},
+    {"ticker": "PRESTIGE.NS",   "name": "Prestige Estates",         "cap": "mid"},
+    {"ticker": "MUTHOOTFIN.NS", "name": "Muthoot Finance",          "cap": "mid"},
+    {"ticker": "SUNDARMFIN.NS", "name": "Sundaram Finance",         "cap": "mid"},
+    {"ticker": "BANKBARODA.NS", "name": "Bank of Baroda",           "cap": "mid"},
+    {"ticker": "IDFCFIRSTB.NS", "name": "IDFC First Bank",          "cap": "mid"},
+    {"ticker": "FEDERALBNK.NS", "name": "Federal Bank",             "cap": "mid"},
+    {"ticker": "DIVISLAB.NS",   "name": "Divi's Laboratories",      "cap": "mid"},
+    {"ticker": "GLENMARK.NS",   "name": "Glenmark Pharma",          "cap": "mid"},
+    {"ticker": "ZYDUSLIFE.NS",  "name": "Zydus Lifesciences",       "cap": "mid"},
+    {"ticker": "RATNAMANI.NS",  "name": "Ratnamani Metals",         "cap": "mid"},
+    {"ticker": "AIAENG.NS",     "name": "AIA Engineering",          "cap": "mid"},
+    {"ticker": "CAMS.NS",       "name": "CAMS",                     "cap": "mid"},
+    {"ticker": "LALPATHLAB.NS", "name": "Dr. Lal PathLabs",         "cap": "mid"},
+    {"ticker": "TATAELXSI.NS",  "name": "Tata Elxsi",               "cap": "mid"},
+    {"ticker": "KPITTECH.NS",   "name": "KPIT Technologies",        "cap": "mid"},
+    {"ticker": "M&M.NS",        "name": "Mahindra & Mahindra",      "cap": "mid"},
+    {"ticker": "DLF.NS",        "name": "DLF",                      "cap": "mid"},
+    {"ticker": "PHOENIXLTD.NS", "name": "Phoenix Mills",            "cap": "mid"},
+    {"ticker": "TVSMOTOR.NS",   "name": "TVS Motor",                "cap": "mid"},
+    {"ticker": "BALKRISIND.NS", "name": "Balkrishna Industries",    "cap": "mid"},
+    {"ticker": "MOTHERSON.NS",  "name": "Samvardhana Motherson",    "cap": "mid"},
+    {"ticker": "TIINDIA.NS",    "name": "Tube Investments",         "cap": "mid"},
+    # --- Small Cap ---
+    {"ticker": "IGL.NS",        "name": "Indraprastha Gas",         "cap": "small"},
+    {"ticker": "IRCON.NS",      "name": "IRCON International",      "cap": "small"},
+    {"ticker": "RVNL.NS",       "name": "Rail Vikas Nigam",         "cap": "small"},
+    {"ticker": "NBCC.NS",       "name": "NBCC India",               "cap": "small"},
+    {"ticker": "MOIL.NS",       "name": "MOIL",                     "cap": "small"},
+    {"ticker": "NATIONALUM.NS", "name": "National Aluminium",       "cap": "small"},
+    {"ticker": "HINDCOPPER.NS", "name": "Hindustan Copper",         "cap": "small"},
+    {"ticker": "SAIL.NS",       "name": "SAIL",                     "cap": "small"},
+    {"ticker": "KEC.NS",        "name": "KEC International",        "cap": "small"},
+    {"ticker": "PNCINFRA.NS",   "name": "PNC Infratech",            "cap": "small"},
+    {"ticker": "KNRCON.NS",     "name": "KNR Constructions",        "cap": "small"},
+    {"ticker": "GRANULES.NS",   "name": "Granules India",           "cap": "small"},
+    {"ticker": "NATCOPHARM.NS", "name": "Natco Pharma",             "cap": "small"},
+    {"ticker": "IPCALAB.NS",    "name": "IPCA Labs",                "cap": "small"},
+    {"ticker": "EMAMILTD.NS",   "name": "Emami",                    "cap": "small"},
+    {"ticker": "RADICO.NS",     "name": "Radico Khaitan",           "cap": "small"},
+    {"ticker": "SAREGAMA.NS",   "name": "Saregama India",           "cap": "small"},
+    {"ticker": "PVRINOX.NS",    "name": "PVR Inox",                 "cap": "small"},
+    {"ticker": "JINDALSAW.NS",  "name": "Jindal Saw",               "cap": "small"},
+    {"ticker": "AJMERA.NS",     "name": "Ajmera Realty",            "cap": "small"},
+    {"ticker": "KOLTEPATIL.NS", "name": "Kolte-Patil Dev.",         "cap": "small"},
+    {"ticker": "BRIGADE.NS",    "name": "Brigade Enterprises",      "cap": "small"},
+    {"ticker": "SUNTECK.NS",    "name": "Sunteck Realty",           "cap": "small"},
+    {"ticker": "HAPPSTMNDS.NS", "name": "Happiest Minds",           "cap": "small"},
+    {"ticker": "DELHIVERY.NS",  "name": "Delhivery",                "cap": "small"},
+    {"ticker": "CAMPUS.NS",     "name": "Campus Activewear",        "cap": "small"},
+    {"ticker": "ADANIPORTS.NS", "name": "Adani Ports",              "cap": "small"},
+    {"ticker": "TATAPOWER.NS",  "name": "Tata Power",               "cap": "small"},
+    {"ticker": "ADANIGREEN.NS", "name": "Adani Green Energy",       "cap": "small"},
+    {"ticker": "GAIL.NS",       "name": "GAIL India",               "cap": "small"},
+    {"ticker": "IOC.NS",        "name": "Indian Oil Corporation",   "cap": "small"},
+    {"ticker": "HINDPETRO.NS",  "name": "Hindustan Petroleum",      "cap": "small"},
+    {"ticker": "YESBANK.NS",    "name": "Yes Bank",                 "cap": "small"},
+    {"ticker": "BANDHANBNK.NS", "name": "Bandhan Bank",             "cap": "small"},
+    {"ticker": "PNB.NS",        "name": "Punjab National Bank",     "cap": "small"},
+    {"ticker": "CANARABANK.NS", "name": "Canara Bank",              "cap": "small"},
+    {"ticker": "UNIONBANK.NS",  "name": "Union Bank of India",      "cap": "small"},
+    {"ticker": "DABUR.NS",      "name": "Dabur India",              "cap": "small"},
+    {"ticker": "MARICO.NS",     "name": "Marico",                   "cap": "small"},
+    {"ticker": "COLPAL.NS",     "name": "Colgate-Palmolive India",  "cap": "small"},
+    {"ticker": "VBL.NS",        "name": "Varun Beverages",          "cap": "small"},
+]
+
+_stock_finder_executor = None  # lazy init
+
+
+def _scan_stock_for_finder(stock_meta: Dict) -> Optional[Dict]:
+    """
+    Sync: fetch daily bars for one stock and run all 7 mini strategies.
+    Returns a result dict if any signal found, else None.
+    """
+    import math
+
+    def _safe(v, default=0.0):
+        try:
+            f = float(v)
+            return default if (math.isnan(f) or math.isinf(f)) else round(f, 2)
+        except Exception:
+            return default
+
+    try:
+        obj = yf.Ticker(stock_meta["ticker"])
+        hist = obj.history(period="6mo", interval="1d")
+        if hist.empty or len(hist) < 50:
+            return None
+
+        bars = [
+            {
+                "open":   float(r["Open"]),
+                "high":   float(r["High"]),
+                "low":    float(r["Low"]),
+                "close":  float(r["Close"]),
+                "volume": float(r.get("Volume", 0)),
+            }
+            for _, r in hist.iterrows()
+        ]
+
+        current = bars[-1]["close"]
+        signals = []
+
+        # ---- Mini strategy runners ----
+        for strategy_name, runner_fn in [
+            ("Falling Knife",   lambda b: run_mini_falling_knife(b)),
+            ("Reverse Swings A", lambda b: run_mini_reverse_swings(b, "A")),
+            ("Reverse Swings B", lambda b: run_mini_reverse_swings(b, "B")),
+            ("Explosive Volume", lambda b: run_mini_explosive_volume(b)),
+            ("Golden Setup",     lambda b: run_mini_golden_setup(b)),
+            ("Godzilla TTE",     lambda b: run_mini_godzilla(b)),
+        ]:
+            try:
+                result = runner_fn(bars)
+                direction = result[0]
+                levels    = result[1] if len(result) > 1 else None
+                if direction != "WAIT" and levels and isinstance(levels, dict):
+                    signals.append({
+                        "strategy":   strategy_name,
+                        "direction":  direction,
+                        "entry":      _safe(levels.get("entry", current)),
+                        "stoploss":   _safe(levels.get("sl", current * 0.97)),
+                        "targets":    [_safe(t) for t in levels.get("targets", [])],
+                        "confidence": {"Falling Knife": 78, "Reverse Swings A": 72,
+                                       "Reverse Swings B": 72, "Explosive Volume": 82,
+                                       "Golden Setup": 85, "Godzilla TTE": 83}.get(strategy_name, 75),
+                    })
+            except Exception:
+                pass
+
+        # ---- AI Indicator ----
+        try:
+            ai_res   = run_mini_ai_indicator(bars)
+            ai_dir   = ai_res[0]
+            ai_lvl   = ai_res[1] if len(ai_res) > 1 else None
+            ai_score = ai_res[2] if len(ai_res) > 2 else 50
+            if ai_dir != "WAIT" and ai_lvl and isinstance(ai_lvl, dict):
+                signals.append({
+                    "strategy":   f"AI Indicator ({ai_score})",
+                    "direction":  ai_dir,
+                    "entry":      _safe(ai_lvl.get("entry", current)),
+                    "stoploss":   _safe(ai_lvl.get("sl", current * 0.97)),
+                    "targets":    [_safe(t) for t in ai_lvl.get("targets", [])],
+                    "confidence": min(int(ai_score), 95),
+                })
+        except Exception:
+            pass
+
+        if not signals:
+            return None
+
+        # Best direction by vote (majority)
+        buy_ct  = sum(1 for s in signals if s["direction"] == "BUY")
+        sell_ct = sum(1 for s in signals if s["direction"] == "SELL")
+        best_dir = "BUY" if buy_ct >= sell_ct else "SELL"
+        best_sig = next((s for s in signals if s["direction"] == best_dir), signals[0])
+
+        return {
+            "ticker":        stock_meta["ticker"],
+            "name":          stock_meta["name"],
+            "cap":           stock_meta.get("cap", "large"),
+            "current_price": _safe(current),
+            "signals":       signals,
+            "signal_count":  len(signals),
+            "best_direction": best_dir,
+            "best_entry":    best_sig["entry"],
+            "best_sl":       best_sig["stoploss"],
+            "best_target":   best_sig["targets"][0] if best_sig["targets"] else _safe(current * 1.03),
+            "best_confidence": max(s["confidence"] for s in signals),
+            "strategies":    [s["strategy"] for s in signals],
+        }
+    except Exception:
+        return None
+
+
+@api_router.get("/stock-finder/scan")
+async def stock_finder_scan(cap: str = "all"):
+    """
+    SSE endpoint — streams scan results for every stock in the universe.
+    Each event is JSON:
+      {type: 'progress', current, total, symbol}
+      {type: 'result',   ticker, name, ...}
+      {type: 'done',     total_found, total_scanned}
+    """
+    from fastapi.responses import StreamingResponse as _StreamResp
+    global _stock_finder_executor
+
+    if _stock_finder_executor is None:
+        _stock_finder_executor = _TPE(max_workers=15)
+
+    universe = (
+        _STOCK_FINDER_UNIVERSE if cap == "all"
+        else [s for s in _STOCK_FINDER_UNIVERSE if s.get("cap") == cap]
+    )
+    total = len(universe)
+
+    async def event_stream():
+        loop     = asyncio.get_event_loop()
+        found    = 0
+        batch_sz = 15
+
+        for batch_start in range(0, total, batch_sz):
+            batch   = universe[batch_start: batch_start + batch_sz]
+            tasks   = [loop.run_in_executor(_stock_finder_executor, _scan_stock_for_finder, s)
+                       for s in batch]
+            results = await asyncio.gather(*tasks)
+
+            for j, result in enumerate(results):
+                idx    = batch_start + j
+                sym    = universe[idx]["ticker"]
+                # ---- progress event ----
+                prog = json.dumps({"type": "progress", "current": idx + 1,
+                                   "total": total, "symbol": sym})
+                yield f"data: {prog}\n\n"
+                # ---- result event (if signal) ----
+                if result:
+                    found += 1
+                    res_str = json.dumps({"type": "result", **result})
+                    yield f"data: {res_str}\n\n"
+
+        done = json.dumps({"type": "done", "total_found": found, "total_scanned": total})
+        yield f"data: {done}\n\n"
+
+    return _StreamResp(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "Connection": "keep-alive"},
+    )
+
+
 @api_router.get("/auto-scan/{ticker}")
 async def auto_scan_ticker(ticker: str):
     """Auto-scan a ticker with ALL strategies and return active signals."""
