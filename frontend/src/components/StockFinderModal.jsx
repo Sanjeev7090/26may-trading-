@@ -57,14 +57,14 @@ const buildShareText = (rows, { bmpOnly = false } = {}) => {
   return `${head}\n${lines.join('\n')}${footer}`;
 };
 
-const shareWhatsApp = (rows) => {
+const whatsappUrl = (rows) => {
   const text = encodeURIComponent(buildShareText(rows, { bmpOnly: true }));
-  window.open(`https://wa.me/?text=${text}`, '_blank', 'noopener,noreferrer');
+  return `https://wa.me/?text=${text}`;
 };
 
-const shareTelegram = (rows) => {
+const telegramUrl = (rows) => {
   const text = encodeURIComponent(buildShareText(rows));
-  window.open(`https://t.me/share/url?url=https://emergent.sh&text=${text}`, '_blank', 'noopener,noreferrer');
+  return `https://t.me/share/url?url=https://emergent.sh&text=${text}`;
 };
 
 // Animated progress bar
@@ -478,27 +478,37 @@ const StockFinderModal = ({ onClose, onStockSelect }) => {
               CSV
             </button>
 
-            <button
-              onClick={() => shareWhatsApp(filtered)}
-              disabled={filtered.length === 0}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-[#25D366]/15 text-[#25D366] hover:bg-[#25D366]/25 border border-[#25D366]/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            <a
+              href={filtered.length > 0 ? whatsappUrl(filtered) : undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-disabled={filtered.length === 0}
+              onClick={(e) => { if (filtered.length === 0) e.preventDefault(); }}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-[#25D366]/15 text-[#25D366] hover:bg-[#25D366]/25 border border-[#25D366]/25 transition-colors no-underline ${
+                filtered.length === 0 ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''
+              }`}
               data-testid="share-whatsapp"
               title="Share top setups on WhatsApp"
             >
               <WhatsappLogo size={11} weight="bold" />
               WhatsApp
-            </button>
+            </a>
 
-            <button
-              onClick={() => shareTelegram(filtered)}
-              disabled={filtered.length === 0}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-[#229ED9]/15 text-[#229ED9] hover:bg-[#229ED9]/25 border border-[#229ED9]/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            <a
+              href={filtered.length > 0 ? telegramUrl(filtered) : undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-disabled={filtered.length === 0}
+              onClick={(e) => { if (filtered.length === 0) e.preventDefault(); }}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-[#229ED9]/15 text-[#229ED9] hover:bg-[#229ED9]/25 border border-[#229ED9]/25 transition-colors no-underline ${
+                filtered.length === 0 ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''
+              }`}
               data-testid="share-telegram"
               title="Share top setups on Telegram"
             >
               <TelegramLogo size={11} weight="bold" />
               Telegram
-            </button>
+            </a>
           </div>
         </div>
       </div>
