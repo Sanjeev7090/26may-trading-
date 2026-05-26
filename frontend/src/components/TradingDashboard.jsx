@@ -30,6 +30,7 @@ import HybridDashboard from './hybrid/HybridDashboard';
 import GannQSCPanel from './GannQSCPanel';
 import RegulatoryWatchdogPanel from './RegulatoryWatchdogPanel';
 import NarrativeSwingAnalysis from './NarrativeSwingAnalysis';
+import HybridVWAPAnalysis from './HybridVWAPAnalysis';
 import OrderFlowPanel from './OrderFlowPanel';
 import GrowwPortfolio from './GrowwPortfolio';
 import IndicesTickerBar from './IndicesTickerBar';
@@ -695,6 +696,7 @@ const TradingDashboard = () => {
                     <GodzillaSetupAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
                     <DemonAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
                     <NarrativeSwingAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
+                    <HybridVWAPAnalysis stockData={stockData} selectedStock={selectedStock} onAnalysisComplete={handleStrategyAnalysis} />
                   </>
                 )}
                 {!selectedStock && (

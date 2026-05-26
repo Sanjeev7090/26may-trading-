@@ -381,6 +381,47 @@ class NarrativeSwingResponse(BaseModel):
     confidence: int = 0
     recommendation: str
 
+# Hybrid VWAP+TWAP Models
+class HybridVWAPRequest(BaseModel):
+    ticker: str
+    bars: List[dict]
+    quantity: Optional[int] = 100
+    side: Optional[str] = "BUY"
+    duration_minutes: Optional[int] = 30
+    max_slices: Optional[int] = 12
+
+class VWAPSlice(BaseModel):
+    slice_no: int
+    time_offset_min: float
+    qty: int
+    target_price: float
+    vwap_basis: float
+
+class HybridVWAPResponse(BaseModel):
+    status: str
+    signal_type: str           # BUY | SELL | WAIT
+    confidence: int
+    vwap: float
+    twap: float
+    upper_band: float
+    lower_band: float
+    current_price: float
+    vwap_deviation_pct: float
+    price_position: str        # ABOVE_VWAP | BELOW_VWAP | AT_VWAP
+    rsi: float
+    atr: float
+    volume_ratio: float
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    target1: Optional[float] = None
+    target2: Optional[float] = None
+    target3: Optional[float] = None
+    risk_reward: Optional[str] = None
+    vwap_signal_type: str      # BOUNCE | TREND_FOLLOW | WAIT
+    execution_plan: Optional[List[VWAPSlice]] = None
+    recommendation: str
+
+
 # SMC (Smart Money Concepts) Models
 class SMCAnalysisRequest(BaseModel):
     ticker: str
@@ -5268,6 +5309,13 @@ def run_demon_on_bars(bars):
         "godzilla": {"signal": gz_signal, "name": "Godzilla TTE", "weight": 1.2},
     }
 
+    # Hybrid VWAP+TWAP (lightweight — add to confluence)
+    try:
+        vwap_dir, _ = run_mini_hybrid_vwap(bars)
+        strategies["hybrid_vwap"] = {"signal": vwap_dir, "name": "Hybrid VWAP+TWAP", "weight": 0.8}
+    except Exception:
+        pass
+
     buy_count = sum(1 for s in strategies.values() if s["signal"] == "BUY")
     sell_count = sum(1 for s in strategies.values() if s["signal"] == "SELL")
     total = len(strategies)
@@ -5333,6 +5381,108 @@ def run_demon_on_bars(bars):
         "strategy_signals": strategy_signals,
         "current_price": current,
     }
+
+
+def run_mini_hybrid_vwap(bars):
+    """
+    Hybrid VWAP+TWAP Strategy — Signal Generator
+    CONDITIONS:
+      BUY  : Price > VWAP, last bar bullish, volume above avg, RSI 40-65
+      SELL : Price < VWAP, last bar bearish, volume above avg, RSI 35-60
+      BOUNCE: Price within 0.5% of VWAP with reversal candle → strongest signal
+    ENTRY : Current price (for bounce: VWAP ± 0.1%)
+    SL    : VWAP ∓ 1.5 × ATR (BUY: below VWAP, SELL: above VWAP)
+    TARGET: Upper/Lower VWAP band (±1.5σ), then ±3σ, then R×3
+    """
+    try:
+        if len(bars) < 20:
+            return "WAIT", None
+
+        closes = [b['close'] for b in bars]
+        highs  = [b['high']  for b in bars]
+        lows   = [b['low']   for b in bars]
+        vols   = [b.get('volume', 0) for b in bars]
+
+        # VWAP from all bars
+        tpv_sum = vol_sum = 0.0
+        for b in bars:
+            tp = (b['high'] + b['low'] + b['close']) / 3
+            v  = b.get('volume', 1) or 1
+            tpv_sum += tp * v
+            vol_sum  += v
+        vwap = tpv_sum / vol_sum if vol_sum > 0 else closes[-1]
+
+        # Standard deviation of typical prices for bands
+        tp_vals = [(b['high'] + b['low'] + b['close']) / 3 for b in bars]
+        sd = (sum((tp - vwap) ** 2 for tp in tp_vals) / len(tp_vals)) ** 0.5
+        upper_band = vwap + 1.5 * sd
+        lower_band = vwap - 1.5 * sd
+
+        # ATR (14-period)
+        atr_vals = []
+        for i in range(1, min(15, len(bars))):
+            tr = max(
+                highs[-i] - lows[-i],
+                abs(highs[-i] - closes[-i - 1]),
+                abs(lows[-i]  - closes[-i - 1]),
+            )
+            atr_vals.append(tr)
+        atr = sum(atr_vals) / len(atr_vals) if atr_vals else closes[-1] * 0.01
+
+        # RSI-14
+        gains = losses = 0.0
+        for i in range(-14, -1):
+            diff = closes[i + 1] - closes[i]
+            if diff > 0: gains  += diff
+            else:        losses -= diff
+        gains  /= 14; losses /= 14
+        rsi = 100 - 100 / (1 + gains / losses) if losses > 0 else 100.0
+
+        current  = closes[-1]
+        last_bar = bars[-1]
+        is_bull  = last_bar['close'] > last_bar['open']
+        is_bear  = last_bar['close'] < last_bar['open']
+
+        vol_avg = sum(vols[-20:]) / max(len(vols[-20:]), 1)
+        hi_vol  = vols[-1] > vol_avg * 1.1 if vol_avg > 0 else True
+
+        deviation_pct = abs(current - vwap) / vwap * 100
+        near_vwap     = deviation_pct <= 0.5
+
+        # Signal classification
+        if near_vwap and is_bull and hi_vol:
+            # Bounce off VWAP — strongest setup
+            direction = "BUY"
+            entry = round(vwap * 1.001, 2)
+        elif near_vwap and is_bear and hi_vol:
+            direction = "SELL"
+            entry = round(vwap * 0.999, 2)
+        elif current > vwap and is_bull and 40 <= rsi <= 65 and hi_vol:
+            direction = "BUY"
+            entry = round(current, 2)
+        elif current < vwap and is_bear and 35 <= rsi <= 60 and hi_vol:
+            direction = "SELL"
+            entry = round(current, 2)
+        else:
+            return "WAIT", None
+
+        if direction == "BUY":
+            sl = round(vwap - 1.5 * atr, 2)
+            t1 = round(upper_band, 2)
+            t2 = round(vwap + 3 * sd, 2)
+            t3 = round(entry + (entry - sl) * 3, 2)
+        else:
+            sl = round(vwap + 1.5 * atr, 2)
+            t1 = round(lower_band, 2)
+            t2 = round(vwap - 3 * sd, 2)
+            t3 = round(entry - (sl - entry) * 3, 2)
+
+        return direction, {"entry": entry, "sl": sl, "targets": [t1, t2, t3],
+                           "vwap": round(vwap, 2), "upper_band": round(upper_band, 2),
+                           "lower_band": round(lower_band, 2), "rsi": round(rsi, 1),
+                           "atr": round(atr, 2)}
+    except Exception:
+        return "WAIT", None
 
 
 # ======================= AUTO SCANNER =======================
@@ -5428,6 +5578,7 @@ _STRATEGY_WEIGHTS = {
     "AMDS":              3.0,
     "PAC+S&O":           3.0,
     "Narrative Swing":   3.0,
+    "Hybrid VWAP+TWAP": 6.0,
 }
 _TOTAL_STRATEGY_WEIGHT = sum(_STRATEGY_WEIGHTS.values())  # 108.0
 
@@ -6601,6 +6752,19 @@ async def auto_scan_ticker(ticker: str):
                 "targets": [pac_tp1, pac_tp2, pac_tp3],
                 "confidence": pac_result.get("confidence", 65),
                 "day_target": calc_day_target(pac_result["signal_type"]),
+            })
+
+        # Hybrid VWAP+TWAP
+        vwap_dir, vwap_lvl = run_mini_hybrid_vwap(bars)
+        if vwap_dir != "WAIT" and vwap_lvl:
+            signals.append({
+                "strategy": "Hybrid VWAP+TWAP",
+                "direction": vwap_dir,
+                "entry":    json_safe_float(vwap_lvl["entry"]),
+                "stoploss": json_safe_float(vwap_lvl["sl"]),
+                "targets":  [json_safe_float(t) for t in vwap_lvl["targets"]],
+                "confidence": 76,
+                "day_target": json_safe_float(vwap_lvl["targets"][0]),
             })
 
         # MiroFish Swarm Intelligence (cached 5 min to avoid excessive LLM calls)
@@ -8362,6 +8526,208 @@ async def analyze_narrative_swing(request: NarrativeSwingRequest):
         raise
     except Exception as e:
         logging.error(f"Narrative swing analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.post("/hybrid-vwap/analyze")
+async def analyze_hybrid_vwap(request: HybridVWAPRequest):
+    """
+    Hybrid VWAP+TWAP Strategy Analyzer.
+    - Computes VWAP, TWAP, ±1.5σ / ±3σ bands from supplied OHLCV bars
+    - Generates BUY / SELL / WAIT signal
+    - Returns TWAP execution plan (slice schedule) for the requested quantity
+    """
+    try:
+        bars = request.bars
+        if len(bars) < 20:
+            raise HTTPException(status_code=400, detail="Need at least 20 bars")
+
+        import math
+
+        closes = [float(b['close']) for b in bars]
+        highs  = [float(b['high'])  for b in bars]
+        lows   = [float(b['low'])   for b in bars]
+        vols   = [float(b.get('volume', 1) or 1) for b in bars]
+
+        # ── VWAP ────────────────────────────────────────────────────────────
+        tpv_sum = vol_sum = 0.0
+        for i, b in enumerate(bars):
+            tp = (highs[i] + lows[i] + closes[i]) / 3
+            v  = vols[i]
+            tpv_sum += tp * v
+            vol_sum  += v
+        vwap = tpv_sum / vol_sum if vol_sum > 0 else closes[-1]
+
+        # σ bands
+        tp_vals = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(bars))]
+        sd = math.sqrt(sum((tp - vwap) ** 2 for tp in tp_vals) / len(tp_vals))
+        upper_band1 = vwap + 1.5 * sd
+        lower_band1 = vwap - 1.5 * sd
+        upper_band2 = vwap + 3.0 * sd
+        lower_band2 = vwap - 3.0 * sd
+
+        # ── TWAP (simple avg close) ──────────────────────────────────────────
+        twap = sum(closes) / len(closes)
+
+        # ── ATR-14 ──────────────────────────────────────────────────────────
+        atr_vals = []
+        for i in range(1, min(15, len(bars))):
+            tr = max(
+                highs[-i] - lows[-i],
+                abs(highs[-i] - closes[-i - 1]),
+                abs(lows[-i]  - closes[-i - 1]),
+            )
+            atr_vals.append(tr)
+        atr = sum(atr_vals) / len(atr_vals) if atr_vals else closes[-1] * 0.01
+
+        # ── RSI-14 ──────────────────────────────────────────────────────────
+        gains = losses = 0.0
+        for i in range(-14, -1):
+            diff = closes[i + 1] - closes[i]
+            if diff > 0: gains  += diff
+            else:        losses -= diff
+        gains /= 14; losses /= 14
+        rsi = 100 - 100 / (1 + gains / losses) if losses > 0 else 100.0
+
+        # ── Volume ratio ─────────────────────────────────────────────────────
+        vol_avg    = sum(vols[-20:]) / max(len(vols[-20:]), 1)
+        vol_ratio  = round(vols[-1] / vol_avg, 2) if vol_avg > 0 else 1.0
+
+        # ── Signal ───────────────────────────────────────────────────────────
+        current         = closes[-1]
+        dev_pct         = (current - vwap) / vwap * 100
+        near_vwap       = abs(dev_pct) <= 0.5
+        is_bull         = bars[-1]['close'] > bars[-1]['open']
+        is_bear         = bars[-1]['close'] < bars[-1]['open']
+        hi_vol          = vol_ratio >= 1.1
+
+        price_position  = "AT_VWAP" if near_vwap else ("ABOVE_VWAP" if current > vwap else "BELOW_VWAP")
+
+        if near_vwap and is_bull and hi_vol:
+            signal_type     = "BUY"
+            vwap_signal_type= "BOUNCE"
+            confidence      = min(88, int(60 + vol_ratio * 10))
+            entry           = round(vwap * 1.001, 2)
+            sl              = round(vwap - 1.5 * atr, 2)
+            t1              = round(upper_band1, 2)
+            t2              = round(upper_band2, 2)
+            t3              = round(entry + (entry - sl) * 3, 2)
+        elif near_vwap and is_bear and hi_vol:
+            signal_type     = "SELL"
+            vwap_signal_type= "BOUNCE"
+            confidence      = min(88, int(60 + vol_ratio * 10))
+            entry           = round(vwap * 0.999, 2)
+            sl              = round(vwap + 1.5 * atr, 2)
+            t1              = round(lower_band1, 2)
+            t2              = round(lower_band2, 2)
+            t3              = round(entry - (sl - entry) * 3, 2)
+        elif current > vwap and is_bull and 40 <= rsi <= 65 and hi_vol:
+            signal_type     = "BUY"
+            vwap_signal_type= "TREND_FOLLOW"
+            confidence      = min(78, int(50 + rsi / 5))
+            entry           = round(current, 2)
+            sl              = round(vwap - atr, 2)
+            t1              = round(upper_band1, 2)
+            t2              = round(upper_band2, 2)
+            t3              = round(entry + (entry - sl) * 3, 2)
+        elif current < vwap and is_bear and 35 <= rsi <= 60 and hi_vol:
+            signal_type     = "SELL"
+            vwap_signal_type= "TREND_FOLLOW"
+            confidence      = min(78, int(50 + (100 - rsi) / 5))
+            entry           = round(current, 2)
+            sl              = round(vwap + atr, 2)
+            t1              = round(lower_band1, 2)
+            t2              = round(lower_band2, 2)
+            t3              = round(entry - (sl - entry) * 3, 2)
+        else:
+            signal_type     = "WAIT"
+            vwap_signal_type= "WAIT"
+            confidence      = 20
+            entry = sl = t1 = t2 = t3 = None
+
+        # ── Risk-Reward ──────────────────────────────────────────────────────
+        rr = None
+        if entry and sl and t1:
+            risk   = abs(entry - sl)
+            reward = abs(t1 - entry)
+            rr     = f"1:{round(reward / risk, 1)}" if risk > 0 else "N/A"
+
+        # ── TWAP Execution Plan ───────────────────────────────────────────────
+        qty      = max(request.quantity or 100, 1)
+        n_slices = min(request.max_slices or 12, 20)
+        dur_min  = request.duration_minutes or 30
+        interval = dur_min / n_slices
+        slice_sz = max(qty // n_slices, 1)
+        remainder= qty - slice_sz * n_slices
+
+        # Small VWAP-band deviation per slice (±0.3%)
+        import random; random.seed(42)
+        execution_plan = []
+        for i in range(n_slices):
+            extra  = 1 if i == n_slices - 1 else 0
+            s_qty  = slice_sz + (remainder if extra else 0)
+            dev    = random.uniform(-0.003, 0.003)
+            t_price= round(vwap * (1 + dev), 2)
+            execution_plan.append(VWAPSlice(
+                slice_no=i + 1,
+                time_offset_min=round(i * interval, 1),
+                qty=s_qty,
+                target_price=t_price,
+                vwap_basis=round(vwap, 2),
+            ))
+
+        # ── Recommendation text ──────────────────────────────────────────────
+        if signal_type == "BUY":
+            rec = (
+                f"{'VWAP Bounce BUY' if vwap_signal_type == 'BOUNCE' else 'VWAP Trend-Follow BUY'}: "
+                f"Price {'touched' if near_vwap else 'is'} ₹{vwap:.2f} VWAP "
+                f"(dev {dev_pct:+.2f}%). RSI={rsi:.0f}, VolRatio={vol_ratio}x. "
+                f"Entry ₹{entry} | SL ₹{sl} | T1 ₹{t1}. "
+                f"TWAP plan: {n_slices} slices × {slice_sz} qty over {dur_min} min."
+            )
+        elif signal_type == "SELL":
+            rec = (
+                f"{'VWAP Bounce SELL' if vwap_signal_type == 'BOUNCE' else 'VWAP Trend-Follow SELL'}: "
+                f"Price {'touched' if near_vwap else 'is below'} ₹{vwap:.2f} VWAP "
+                f"(dev {dev_pct:+.2f}%). RSI={rsi:.0f}, VolRatio={vol_ratio}x. "
+                f"Entry ₹{entry} | SL ₹{sl} | T1 ₹{t1}. "
+                f"TWAP plan: {n_slices} slices × {slice_sz} qty over {dur_min} min."
+            )
+        else:
+            rec = (
+                f"No VWAP signal. Price deviation from VWAP: {dev_pct:+.2f}%. "
+                f"RSI={rsi:.0f}, VolRatio={vol_ratio}x. "
+                f"Wait for price to test VWAP (₹{vwap:.2f}) with volume confirmation."
+            )
+
+        return HybridVWAPResponse(
+            status="ok",
+            signal_type=signal_type,
+            confidence=confidence,
+            vwap=round(vwap, 2),
+            twap=round(twap, 2),
+            upper_band=round(upper_band1, 2),
+            lower_band=round(lower_band1, 2),
+            current_price=round(current, 2),
+            vwap_deviation_pct=round(dev_pct, 2),
+            price_position=price_position,
+            rsi=round(rsi, 1),
+            atr=round(atr, 2),
+            volume_ratio=vol_ratio,
+            entry_price=entry,
+            stop_loss=sl,
+            target1=t1,
+            target2=t2,
+            target3=t3,
+            risk_reward=rr,
+            vwap_signal_type=vwap_signal_type,
+            execution_plan=execution_plan,
+            recommendation=rec,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Hybrid VWAP analysis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
