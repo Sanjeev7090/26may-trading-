@@ -272,13 +272,17 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Verify all backend endpoints are responding"
-    - "Test frontend dashboard loads correctly"
-    - "Verify all strategy components render"
+    - "Multi-TF Scanner modal opens and streams results correctly"
+    - "Segment filters (fo, index, banknifty, midcap, cash, all) work"
+    - "Timeframe toggles (15m, 1h, 1d) work"
+    - "Min confluence filter works"
+    - "Results table shows per-TF direction + weighted score + confluence dots"
+    - "Weighted confluence scoring in auto-scan endpoint"
+    - "CSV download works after scan"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
   - agent: "main"
-    message: "Dark/Light mode and mobile responsive improvements implemented. ThemeContext.jsx created with localStorage persistence. index.css updated with global CSS variable overrides for all 96 components (no individual component changes needed except key ones). TradingDashboard updated with Sun/Moon toggle button, dark: Tailwind variants, improved mobile bottom nav with green top indicator. ChartPanel updated with theme-aware canvas colors. IndicesTickerBar, StockSearch, RegulatoryWatchdogPanel all updated for light mode. Build successful, no linting errors."
+    message: "Implemented two new features: (1) Weighted Confluence Scoring - replaced old flat-score system with strategy weights from user image (Godzilla 22%, SMC 20%, MiroFish 18%, ExpVol 12%, etc.) in _calc_weighted_confluence(); applied to auto-scan endpoint. (2) Multi-TF + Multi-Asset Scanner - new /api/multi-tf-scanner/scan SSE endpoint scans F&O/Cash/Index/BankNifty/FinNifty/Midcap universe (100+ stocks) across 15M/1H/1D timeframes with MTF confluence scoring. New MultiTFScannerModal.jsx component with segment/TF filters, progress bar, sortable table with per-TF direction columns, confluence dots, CSV export. New 'Multi-TF' button added in AutoScanner header."

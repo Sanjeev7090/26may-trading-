@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Lightning, Bell, X, TrendUp, TrendDown, Play, Pause, SpeakerHigh, CurrencyInr, Binoculars } from '@phosphor-icons/react';
+import { Lightning, Bell, X, TrendUp, TrendDown, Play, Pause, SpeakerHigh, CurrencyInr, Binoculars, ChartBar } from '@phosphor-icons/react';
 import StockFinderModal from './StockFinderModal';
+import MultiTFScannerModal from './MultiTFScannerModal';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -187,7 +188,8 @@ const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTr
   const [scanning, setScanning] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [confluenceData, setConfluenceData] = useState(null);
-  const [showFinder, setShowFinder] = useState(false);
+  const [showFinder,    setShowFinder]    = useState(false);
+  const [showMultiTF,   setShowMultiTF]   = useState(false);
   const intervalRef = useRef(null);
   const seenSignalsRef = useRef(new Set());
   const autoExecuteRef = useRef(autoExecute);
@@ -304,6 +306,15 @@ const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTr
             <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400">Auto Scanner</span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowMultiTF(true)}
+              className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded flex items-center gap-1 bg-sky-500/15 text-sky-400 hover:bg-sky-500/25 border border-sky-500/25 transition-all"
+              data-testid="open-mtf-scanner"
+              title="Multi-Timeframe + Multi-Asset Scanner"
+            >
+              <ChartBar size={11} weight="bold" />
+              Multi-TF
+            </button>
             <button
               onClick={() => setShowFinder(true)}
               className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded flex items-center gap-1 bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25 border border-yellow-500/25 transition-all"
@@ -465,6 +476,17 @@ const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTr
           onStockSelect={(stock) => {
             if (onStockSelect) onStockSelect(stock);
             setShowFinder(false);
+          }}
+        />
+      )}
+
+      {/* Multi-TF Scanner Modal */}
+      {showMultiTF && (
+        <MultiTFScannerModal
+          onClose={() => setShowMultiTF(false)}
+          onStockSelect={(stock) => {
+            if (onStockSelect) onStockSelect(stock);
+            setShowMultiTF(false);
           }}
         />
       )}

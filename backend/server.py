@@ -5413,6 +5413,68 @@ Return ONLY valid JSON:
     return parsed
 
 
+# ======================= STRATEGY WEIGHTS (Weighted Confluence Scoring) =======================
+# Manual weights as defined by user — used for confluence score calculation across all scanners
+_STRATEGY_WEIGHTS = {
+    "Godzilla TTE":     22.0,
+    "SMC":              20.0,
+    "MiroFish":         18.0,
+    "Explosive Volume": 12.0,
+    "Falling Knife":     8.0,
+    "AI Indicator":      8.0,
+    "DEMON":             5.0,
+    "Golden Setup":      3.0,
+    "Reverse Swings":    3.0,   # A + B combined
+    "AMDS":              3.0,
+    "PAC+S&O":           3.0,
+    "Narrative Swing":   3.0,
+}
+_TOTAL_STRATEGY_WEIGHT = sum(_STRATEGY_WEIGHTS.values())  # 108.0
+
+
+def _get_strategy_weight(strategy_name: str) -> float:
+    """Return the weight for a strategy by fuzzy-matching the name."""
+    sn = strategy_name.lower()
+    for key, w in _STRATEGY_WEIGHTS.items():
+        if key.lower() in sn:
+            return w
+    return 2.0  # small default for unrecognized strategies
+
+
+def _calc_weighted_confluence(signals: list) -> tuple:
+    """
+    Returns (confluence_score: int, confluence_label: str, dominant_direction: str, aligned_count: int).
+    Weighted by strategy importance; boosted by per-signal confidence.
+    """
+    buy_signals  = [s for s in signals if s.get("direction") == "BUY"]
+    sell_signals = [s for s in signals if s.get("direction") == "SELL"]
+    dominant_dir = "BUY" if len(buy_signals) >= len(sell_signals) else "SELL"
+    aligned      = buy_signals if dominant_dir == "BUY" else sell_signals
+
+    weighted_sum = 0.0
+    for sig in aligned:
+        w    = _get_strategy_weight(sig.get("strategy", ""))
+        conf = min(sig.get("confidence", 70), 100) / 100.0
+        # Weight * confidence_blend (0.6 base + 0.4 × actual confidence)
+        weighted_sum += w * (0.6 + 0.4 * conf)
+
+    raw_score       = (weighted_sum / _TOTAL_STRATEGY_WEIGHT) * 100.0
+    confluence_score = min(int(raw_score), 100)
+
+    if confluence_score >= 85:
+        label = "EXTREME"
+    elif confluence_score >= 65:
+        label = "VERY STRONG"
+    elif confluence_score >= 45:
+        label = "STRONG"
+    elif confluence_score >= 25:
+        label = "MODERATE"
+    else:
+        label = "WEAK"
+
+    return confluence_score, label, dominant_dir, len(aligned)
+
+
 # ======================= STOCK FINDER =======================
 
 _STOCK_FINDER_UNIVERSE = [
@@ -5710,6 +5772,355 @@ async def stock_finder_scan(request: Request, cap: str = "all"):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                  "Connection": "keep-alive"},
+    )
+
+
+# =============================================================================
+# MULTI-TIMEFRAME + MULTI-ASSET SCANNER
+# =============================================================================
+
+# F&O Universe — indices + most liquid NSE F&O stocks
+_MTF_UNIVERSE: List[Dict] = [
+    # ── Indices ──────────────────────────────────────────────────────────────
+    {"ticker": "^NSEI",      "name": "Nifty 50",          "segment": "index"},
+    {"ticker": "^NSEBANK",   "name": "Bank Nifty",         "segment": "index"},
+    {"ticker": "^NSEMDCP50", "name": "Nifty Midcap 50",    "segment": "index"},
+    {"ticker": "NIFTYNXT50.NS", "name": "Nifty Next 50",   "segment": "index"},
+    # ── Nifty 50 / Large-Cap F&O ─────────────────────────────────────────────
+    {"ticker": "RELIANCE.NS",   "name": "Reliance Industries",    "segment": "fo"},
+    {"ticker": "TCS.NS",        "name": "TCS",                    "segment": "fo"},
+    {"ticker": "HDFCBANK.NS",   "name": "HDFC Bank",              "segment": "fo"},
+    {"ticker": "ICICIBANK.NS",  "name": "ICICI Bank",             "segment": "fo"},
+    {"ticker": "INFY.NS",       "name": "Infosys",                "segment": "fo"},
+    {"ticker": "BHARTIARTL.NS", "name": "Bharti Airtel",          "segment": "fo"},
+    {"ticker": "ITC.NS",        "name": "ITC",                    "segment": "fo"},
+    {"ticker": "BAJFINANCE.NS", "name": "Bajaj Finance",          "segment": "fo"},
+    {"ticker": "LT.NS",         "name": "L&T",                    "segment": "fo"},
+    {"ticker": "KOTAKBANK.NS",  "name": "Kotak Bank",             "segment": "fo"},
+    {"ticker": "AXISBANK.NS",   "name": "Axis Bank",              "segment": "fo"},
+    {"ticker": "HCLTECH.NS",    "name": "HCL Technologies",       "segment": "fo"},
+    {"ticker": "WIPRO.NS",      "name": "Wipro",                  "segment": "fo"},
+    {"ticker": "MARUTI.NS",     "name": "Maruti Suzuki",          "segment": "fo"},
+    {"ticker": "SBIN.NS",       "name": "SBI",                    "segment": "fo"},
+    {"ticker": "ADANIENT.NS",   "name": "Adani Enterprises",      "segment": "fo"},
+    {"ticker": "TATAMOTORS.NS", "name": "Tata Motors",            "segment": "fo"},
+    {"ticker": "SUNPHARMA.NS",  "name": "Sun Pharma",             "segment": "fo"},
+    {"ticker": "TITAN.NS",      "name": "Titan Company",          "segment": "fo"},
+    {"ticker": "NTPC.NS",       "name": "NTPC",                   "segment": "fo"},
+    {"ticker": "ONGC.NS",       "name": "ONGC",                   "segment": "fo"},
+    {"ticker": "COALINDIA.NS",  "name": "Coal India",             "segment": "fo"},
+    {"ticker": "TATASTEEL.NS",  "name": "Tata Steel",             "segment": "fo"},
+    {"ticker": "DRREDDY.NS",    "name": "Dr. Reddy's",            "segment": "fo"},
+    {"ticker": "CIPLA.NS",      "name": "Cipla",                  "segment": "fo"},
+    {"ticker": "BAJAJ-AUTO.NS", "name": "Bajaj Auto",             "segment": "fo"},
+    {"ticker": "EICHERMOT.NS",  "name": "Eicher Motors",          "segment": "fo"},
+    {"ticker": "HEROMOTOCO.NS", "name": "Hero MotoCorp",          "segment": "fo"},
+    {"ticker": "HINDALCO.NS",   "name": "Hindalco",               "segment": "fo"},
+    {"ticker": "ASIANPAINT.NS", "name": "Asian Paints",           "segment": "fo"},
+    {"ticker": "ULTRACEMCO.NS", "name": "UltraTech Cement",       "segment": "fo"},
+    {"ticker": "GRASIM.NS",     "name": "Grasim Industries",      "segment": "fo"},
+    {"ticker": "INDUSINDBK.NS", "name": "IndusInd Bank",          "segment": "fo"},
+    {"ticker": "JSWSTEEL.NS",   "name": "JSW Steel",              "segment": "fo"},
+    {"ticker": "POWERGRID.NS",  "name": "Power Grid",             "segment": "fo"},
+    {"ticker": "BPCL.NS",       "name": "BPCL",                   "segment": "fo"},
+    {"ticker": "TATACONSUM.NS", "name": "Tata Consumer Products", "segment": "fo"},
+    {"ticker": "NESTLEIND.NS",  "name": "Nestle India",           "segment": "fo"},
+    {"ticker": "APOLLOHOSP.NS", "name": "Apollo Hospitals",       "segment": "fo"},
+    {"ticker": "ADANIPORTS.NS", "name": "Adani Ports",            "segment": "fo"},
+    {"ticker": "TATAPOWER.NS",  "name": "Tata Power",             "segment": "fo"},
+    {"ticker": "DIVISLAB.NS",   "name": "Divi's Laboratories",    "segment": "fo"},
+    {"ticker": "BAJAJFINSV.NS", "name": "Bajaj Finserv",          "segment": "fo"},
+    {"ticker": "SBILIFE.NS",    "name": "SBI Life Insurance",     "segment": "fo"},
+    {"ticker": "HDFCLIFE.NS",   "name": "HDFC Life",              "segment": "fo"},
+    {"ticker": "ICICIPRULI.NS", "name": "ICICI Prudential",       "segment": "fo"},
+    # ── BankNifty components ──────────────────────────────────────────────────
+    {"ticker": "BANKBARODA.NS", "name": "Bank of Baroda",         "segment": "banknifty"},
+    {"ticker": "IDFCFIRSTB.NS", "name": "IDFC First Bank",        "segment": "banknifty"},
+    {"ticker": "FEDERALBNK.NS", "name": "Federal Bank",           "segment": "banknifty"},
+    {"ticker": "PNB.NS",        "name": "Punjab National Bank",   "segment": "banknifty"},
+    {"ticker": "CANARABANK.NS", "name": "Canara Bank",            "segment": "banknifty"},
+    {"ticker": "YESBANK.NS",    "name": "Yes Bank",               "segment": "banknifty"},
+    {"ticker": "BANDHANBNK.NS", "name": "Bandhan Bank",           "segment": "banknifty"},
+    {"ticker": "UNIONBANK.NS",  "name": "Union Bank of India",    "segment": "banknifty"},
+    # ── Finnifty components ───────────────────────────────────────────────────
+    {"ticker": "MUTHOOTFIN.NS", "name": "Muthoot Finance",        "segment": "finnifty"},
+    {"ticker": "CHOLAFIN.NS",   "name": "Cholamandalam Finance",  "segment": "finnifty"},
+    {"ticker": "LICHSGFIN.NS",  "name": "LIC Housing Finance",    "segment": "finnifty"},
+    {"ticker": "M&MFIN.NS",     "name": "M&M Financial Services", "segment": "finnifty"},
+    {"ticker": "RECLTD.NS",     "name": "REC Limited",            "segment": "finnifty"},
+    {"ticker": "PFC.NS",        "name": "Power Finance Corp",     "segment": "finnifty"},
+    {"ticker": "IRFC.NS",       "name": "IRFC",                   "segment": "finnifty"},
+    # ── Midcap F&O ────────────────────────────────────────────────────────────
+    {"ticker": "PERSISTENT.NS", "name": "Persistent Systems",     "segment": "midcap"},
+    {"ticker": "COFORGE.NS",    "name": "Coforge",                "segment": "midcap"},
+    {"ticker": "MPHASIS.NS",    "name": "Mphasis",                "segment": "midcap"},
+    {"ticker": "LTIM.NS",       "name": "LTIMindtree",            "segment": "midcap"},
+    {"ticker": "TRENT.NS",      "name": "Trent",                  "segment": "midcap"},
+    {"ticker": "HAVELLS.NS",    "name": "Havells India",          "segment": "midcap"},
+    {"ticker": "VOLTAS.NS",     "name": "Voltas",                 "segment": "midcap"},
+    {"ticker": "TORNTPHARM.NS", "name": "Torrent Pharma",         "segment": "midcap"},
+    {"ticker": "LUPIN.NS",      "name": "Lupin",                  "segment": "midcap"},
+    {"ticker": "AUROPHARMA.NS", "name": "Aurobindo Pharma",       "segment": "midcap"},
+    {"ticker": "OBEROIRLTY.NS", "name": "Oberoi Realty",          "segment": "midcap"},
+    {"ticker": "GODREJPROP.NS", "name": "Godrej Properties",      "segment": "midcap"},
+    {"ticker": "DLF.NS",        "name": "DLF",                    "segment": "midcap"},
+    {"ticker": "TVSMOTOR.NS",   "name": "TVS Motor",              "segment": "midcap"},
+    {"ticker": "BALKRISIND.NS", "name": "Balkrishna Industries",  "segment": "midcap"},
+    {"ticker": "KPITTECH.NS",   "name": "KPIT Technologies",      "segment": "midcap"},
+    {"ticker": "TATAELXSI.NS",  "name": "Tata Elxsi",             "segment": "midcap"},
+    {"ticker": "M&M.NS",        "name": "Mahindra & Mahindra",    "segment": "midcap"},
+    {"ticker": "DEEPAKNTR.NS",  "name": "Deepak Nitrite",         "segment": "midcap"},
+    {"ticker": "PIIND.NS",      "name": "PI Industries",          "segment": "midcap"},
+    {"ticker": "GLENMARK.NS",   "name": "Glenmark Pharma",        "segment": "midcap"},
+    {"ticker": "ZYDUSLIFE.NS",  "name": "Zydus Lifesciences",     "segment": "midcap"},
+    {"ticker": "IGL.NS",        "name": "Indraprastha Gas",       "segment": "midcap"},
+    {"ticker": "GAIL.NS",       "name": "GAIL India",             "segment": "midcap"},
+    {"ticker": "TATACOMM.NS",   "name": "Tata Communications",    "segment": "midcap"},
+    {"ticker": "ABB.NS",        "name": "ABB India",              "segment": "midcap"},
+    {"ticker": "SIEMENS.NS",    "name": "Siemens India",          "segment": "midcap"},
+    {"ticker": "PIDILITIND.NS", "name": "Pidilite Industries",    "segment": "midcap"},
+    {"ticker": "MARICO.NS",     "name": "Marico",                 "segment": "midcap"},
+    {"ticker": "DABUR.NS",      "name": "Dabur India",            "segment": "midcap"},
+    # ── Cash segment (high liquidity, non-F&O) ───────────────────────────────
+    {"ticker": "IRCTC.NS",      "name": "IRCTC",                  "segment": "cash"},
+    {"ticker": "DMART.NS",      "name": "Avenue Supermarts (DMart)", "segment": "cash"},
+    {"ticker": "ZOMATO.NS",     "name": "Zomato",                 "segment": "cash"},
+    {"ticker": "NYKAA.NS",      "name": "Nykaa",                  "segment": "cash"},
+    {"ticker": "PAYTM.NS",      "name": "Paytm",                  "segment": "cash"},
+    {"ticker": "DELHIVERY.NS",  "name": "Delhivery",              "segment": "cash"},
+    {"ticker": "RVNL.NS",       "name": "Rail Vikas Nigam",       "segment": "cash"},
+    {"ticker": "IOC.NS",        "name": "Indian Oil Corp",        "segment": "cash"},
+    {"ticker": "SAIL.NS",       "name": "SAIL",                   "segment": "cash"},
+    {"ticker": "YESBANK.NS",    "name": "Yes Bank",               "segment": "cash"},
+]
+
+# Timeframe parameters for yfinance
+_MTF_TF_PARAMS = {
+    "15m": {"period": "5d",   "interval": "15m", "min_bars": 20, "label": "15 Min"},
+    "1h":  {"period": "30d",  "interval": "1h",  "min_bars": 20, "label": "1 Hour"},
+    "1d":  {"period": "6mo",  "interval": "1d",  "min_bars": 50, "label": "Daily"},
+}
+
+_mtf_executor = None  # lazy ThreadPoolExecutor
+
+
+def _mtf_scan_stock(stock_meta: Dict, timeframes: list) -> Optional[Dict]:
+    """
+    Sync function — fetch OHLCV for each requested TF, run mini strategies,
+    compute weighted score per TF and overall MTF confluence.
+    """
+    import math
+
+    def _safe(v, default=0.0):
+        try:
+            f = float(v)
+            return default if (math.isnan(f) or math.isinf(f)) else round(f, 2)
+        except Exception:
+            return default
+
+    ticker   = stock_meta["ticker"]
+    tf_results = {}
+    current_price = None
+
+    for tf in timeframes:
+        params = _MTF_TF_PARAMS.get(tf)
+        if not params:
+            continue
+        try:
+            obj  = yf.Ticker(ticker)
+            hist = obj.history(period=params["period"], interval=params["interval"])
+            if hist.empty or len(hist) < params["min_bars"]:
+                tf_results[tf] = {"direction": "WAIT", "weighted_score": 0, "signals": []}
+                continue
+
+            bars = [
+                {
+                    "open":   _safe(r["Open"]),
+                    "high":   _safe(r["High"]),
+                    "low":    _safe(r["Low"]),
+                    "close":  _safe(r["Close"]),
+                    "volume": _safe(r.get("Volume", 0)),
+                }
+                for _, r in hist.iterrows()
+            ]
+            if current_price is None:
+                current_price = bars[-1]["close"]
+
+            # Run fast mini-strategies
+            tf_signals = []
+            for sname, runner_fn in [
+                ("Falling Knife",    lambda b: run_mini_falling_knife(b)),
+                ("Reverse Swings A", lambda b: run_mini_reverse_swings(b, "A")),
+                ("Reverse Swings B", lambda b: run_mini_reverse_swings(b, "B")),
+                ("Explosive Volume", lambda b: run_mini_explosive_volume(b)),
+                ("Golden Setup",     lambda b: run_mini_golden_setup(b)),
+                ("Godzilla TTE",     lambda b: run_mini_godzilla(b)),
+            ]:
+                try:
+                    res = runner_fn(bars)
+                    direction = res[0]
+                    levels    = res[1] if len(res) > 1 else None
+                    if direction != "WAIT" and levels and isinstance(levels, dict):
+                        tf_signals.append({
+                            "strategy":   sname,
+                            "direction":  direction,
+                            "entry":      _safe(levels.get("entry",    bars[-1]["close"])),
+                            "stoploss":   _safe(levels.get("sl",       bars[-1]["close"] * 0.97)),
+                            "targets":    [_safe(t) for t in levels.get("targets", [])],
+                            "confidence": {"Falling Knife": 78, "Reverse Swings A": 72,
+                                           "Reverse Swings B": 72, "Explosive Volume": 82,
+                                           "Golden Setup": 85, "Godzilla TTE": 83}.get(sname, 75),
+                        })
+                except Exception:
+                    pass
+
+            try:
+                ai_res = run_mini_ai_indicator(bars)
+                ai_dir, ai_lvl, ai_score = ai_res[0], (ai_res[1] if len(ai_res) > 1 else None), (ai_res[2] if len(ai_res) > 2 else 50)
+                if ai_dir != "WAIT" and ai_lvl and isinstance(ai_lvl, dict):
+                    tf_signals.append({
+                        "strategy":   f"AI Indicator ({ai_score})",
+                        "direction":  ai_dir,
+                        "entry":      _safe(ai_lvl.get("entry", bars[-1]["close"])),
+                        "stoploss":   _safe(ai_lvl.get("sl",    bars[-1]["close"] * 0.97)),
+                        "targets":    [_safe(t) for t in ai_lvl.get("targets", [])],
+                        "confidence": min(int(ai_score), 95),
+                    })
+            except Exception:
+                pass
+
+            try:
+                demon = run_demon_on_bars(bars)
+                if demon and demon.get("signal_type") != "WAIT":
+                    c = bars[-1]["close"]
+                    tf_signals.append({
+                        "strategy":   f"DEMON ({demon.get('verdict','')})",
+                        "direction":  demon["signal_type"],
+                        "entry":      _safe(c),
+                        "stoploss":   _safe(demon.get("stop_loss", c * 0.95)),
+                        "targets":    [_safe(t) for t in demon.get("targets", [c * 1.05])],
+                        "confidence": int(demon.get("confidence", 70)),
+                    })
+            except Exception:
+                pass
+
+            # Weighted score for this TF
+            buy_w  = sum(_get_strategy_weight(s["strategy"]) * (0.6 + 0.4 * s.get("confidence", 70) / 100)
+                         for s in tf_signals if s["direction"] == "BUY")
+            sell_w = sum(_get_strategy_weight(s["strategy"]) * (0.6 + 0.4 * s.get("confidence", 70) / 100)
+                         for s in tf_signals if s["direction"] == "SELL")
+            tf_dir   = "BUY" if buy_w >= sell_w else "SELL"
+            tf_score = int(min(max(buy_w, sell_w) / _TOTAL_STRATEGY_WEIGHT * 100, 100)) if tf_signals else 0
+
+            tf_results[tf] = {
+                "direction":      tf_dir if tf_signals else "WAIT",
+                "weighted_score": tf_score,
+                "signals":        [s["strategy"] for s in tf_signals if s["direction"] == tf_dir],
+                "signal_count":   len([s for s in tf_signals if s["direction"] == tf_dir]),
+                "entry":          tf_signals[0]["entry"] if tf_signals else _safe(current_price or 0),
+                "stoploss":       next((s["stoploss"] for s in tf_signals if s["direction"] == tf_dir), _safe((current_price or 0) * 0.97)),
+                "target":         next((s["targets"][0] for s in tf_signals if s["direction"] == tf_dir and s.get("targets")), _safe((current_price or 0) * 1.03)),
+            }
+
+        except Exception:
+            tf_results[tf] = {"direction": "WAIT", "weighted_score": 0, "signals": []}
+
+    if not current_price:
+        return None
+
+    # MTF Confluence — count TFs with a non-WAIT signal agreeing on same direction
+    active_tfs   = [tf for tf, r in tf_results.items() if r["direction"] != "WAIT"]
+    if not active_tfs:
+        return None
+
+    buy_tfs  = [tf for tf in active_tfs if tf_results[tf]["direction"] == "BUY"]
+    sell_tfs = [tf for tf in active_tfs if tf_results[tf]["direction"] == "SELL"]
+    dominant = "BUY" if len(buy_tfs) >= len(sell_tfs) else "SELL"
+    aligned_tfs  = buy_tfs if dominant == "BUY" else sell_tfs
+    mtf_confluence = len(aligned_tfs)
+
+    # Overall weighted score = average of aligned TF scores
+    overall_score = int(sum(tf_results[tf]["weighted_score"] for tf in aligned_tfs) / len(aligned_tfs)) if aligned_tfs else 0
+
+    best_tf = max(aligned_tfs, key=lambda tf: tf_results[tf]["weighted_score"]) if aligned_tfs else active_tfs[0]
+    best_data = tf_results[best_tf]
+
+    return {
+        "ticker":        ticker,
+        "name":          stock_meta["name"],
+        "segment":       stock_meta["segment"],
+        "current_price": _safe(current_price),
+        "tf_signals":    tf_results,
+        "mtf_confluence": mtf_confluence,
+        "total_timeframes": len(timeframes),
+        "dominant_direction": dominant,
+        "overall_score": overall_score,
+        "best_entry":    best_data.get("entry", _safe(current_price)),
+        "best_sl":       best_data.get("stoploss", _safe(current_price * 0.97)),
+        "best_target":   best_data.get("target", _safe(current_price * 1.03)),
+        "timeframes":    timeframes,
+    }
+
+
+@api_router.get("/multi-tf-scanner/scan")
+async def multi_tf_scanner_scan(request: Request, segment: str = "fo", timeframes: str = "15m,1h,1d"):
+    """
+    SSE endpoint — Multi-Timeframe + Multi-Asset scanner.
+    Streams per-stock results as they complete.
+    Query params:
+      segment  : all | fo | banknifty | finnifty | midcap | index | cash
+      timeframes: comma-separated from 15m,1h,1d  (default: 15m,1h,1d)
+    """
+    from fastapi.responses import StreamingResponse as _StreamResp
+    global _mtf_executor
+    if _mtf_executor is None:
+        _mtf_executor = _TPE(max_workers=12)
+
+    tf_list = [t.strip() for t in timeframes.split(",") if t.strip() in _MTF_TF_PARAMS]
+    if not tf_list:
+        tf_list = ["15m", "1h", "1d"]
+
+    if segment == "all":
+        universe = _MTF_UNIVERSE
+    else:
+        universe = [s for s in _MTF_UNIVERSE if s["segment"] == segment]
+
+    total = len(universe)
+    if total == 0:
+        universe = _MTF_UNIVERSE
+        total    = len(universe)
+
+    async def event_stream():
+        loop    = asyncio.get_event_loop()
+        found   = 0
+        batch_sz = 12
+
+        for batch_start in range(0, total, batch_sz):
+            if await request.is_disconnected():
+                return
+
+            batch   = universe[batch_start: batch_start + batch_sz]
+            tasks   = [loop.run_in_executor(_mtf_executor, _mtf_scan_stock, s, tf_list)
+                       for s in batch]
+            results = await asyncio.gather(*tasks)
+
+            for j, result in enumerate(results):
+                if await request.is_disconnected():
+                    return
+                idx = batch_start + j
+                sym = universe[idx]["ticker"]
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'symbol': sym})}\n\n"
+                if result:
+                    found += 1
+                    yield f"data: {json.dumps({'type': 'result', **result})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done', 'total_found': found, 'total_scanned': total})}\n\n"
+
+    return _StreamResp(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "Connection": "keep-alive", "Access-Control-Allow-Origin": "*"},
     )
 
 
@@ -6225,37 +6636,8 @@ async def auto_scan_ticker(ticker: str):
             except (asyncio.TimeoutError, Exception) as mf_err:
                 logging.warning(f"MiroFish scanner skip for {ticker}: {mf_err}")
 
-        # ---- Confluence Score Calculation ----
-        buy_signals = [s for s in signals if s["direction"] == "BUY"]
-        sell_signals = [s for s in signals if s["direction"] == "SELL"]
-        dominant_dir = "BUY" if len(buy_signals) >= len(sell_signals) else "SELL"
-        aligned = buy_signals if dominant_dir == "BUY" else sell_signals
-
-        # Base score: aligned strategies out of 11 total
-        base_score = (len(aligned) / 11) * 70
-
-        # Premium strategy bonus (+10 each, max 30 extra)
-        premium_names = ["PAC+S&O", "MiroFish", "SMC", "AMDS"]
-        premium_bonus = 0
-        for sig in aligned:
-            for pname in premium_names:
-                if pname in sig["strategy"]:
-                    premium_bonus += 7.5
-                    break
-        premium_bonus = min(premium_bonus, 30)
-
-        confluence_score = min(int(base_score + premium_bonus), 100)
-
-        if confluence_score >= 85:
-            confluence_label = "EXTREME"
-        elif confluence_score >= 65:
-            confluence_label = "VERY STRONG"
-        elif confluence_score >= 45:
-            confluence_label = "STRONG"
-        elif confluence_score >= 25:
-            confluence_label = "MODERATE"
-        else:
-            confluence_label = "WEAK"
+        # ---- Weighted Confluence Score Calculation ----
+        confluence_score, confluence_label, dominant_dir, aligned_count = _calc_weighted_confluence(signals)
 
         result = {
             "ticker": ticker,
@@ -6268,7 +6650,7 @@ async def auto_scan_ticker(ticker: str):
             "confluence_score": confluence_score,
             "confluence_label": confluence_label,
             "dominant_direction": dominant_dir if signals else "NEUTRAL",
-            "aligned_count": len(aligned),
+            "aligned_count": aligned_count,
             "total_strategies": 11,
         }
         
