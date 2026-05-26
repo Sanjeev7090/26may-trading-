@@ -5748,6 +5748,148 @@ async def portfolio_summary():
     }
 
 
+# ======================= TOP MOVERS TODAY =======================
+
+_TOP_MOVERS_STOCKS: Dict[str, List[Dict]] = {
+    "large": [
+        {"ticker": "RELIANCE.NS",   "name": "Reliance Industries"},
+        {"ticker": "TCS.NS",        "name": "TCS"},
+        {"ticker": "HDFCBANK.NS",   "name": "HDFC Bank"},
+        {"ticker": "ICICIBANK.NS",  "name": "ICICI Bank"},
+        {"ticker": "INFY.NS",       "name": "Infosys"},
+        {"ticker": "BHARTIARTL.NS", "name": "Bharti Airtel"},
+        {"ticker": "ITC.NS",        "name": "ITC"},
+        {"ticker": "BAJFINANCE.NS", "name": "Bajaj Finance"},
+        {"ticker": "LT.NS",         "name": "L&T"},
+        {"ticker": "KOTAKBANK.NS",  "name": "Kotak Bank"},
+        {"ticker": "AXISBANK.NS",   "name": "Axis Bank"},
+        {"ticker": "HCLTECH.NS",    "name": "HCL Tech"},
+        {"ticker": "WIPRO.NS",      "name": "Wipro"},
+        {"ticker": "MARUTI.NS",     "name": "Maruti Suzuki"},
+        {"ticker": "SBIN.NS",       "name": "SBI"},
+        {"ticker": "ADANIENT.NS",   "name": "Adani Enterprises"},
+        {"ticker": "TATAMOTORS.NS", "name": "Tata Motors"},
+        {"ticker": "SUNPHARMA.NS",  "name": "Sun Pharma"},
+        {"ticker": "TITAN.NS",      "name": "Titan"},
+        {"ticker": "NTPC.NS",       "name": "NTPC"},
+        {"ticker": "ONGC.NS",       "name": "ONGC"},
+        {"ticker": "COALINDIA.NS",  "name": "Coal India"},
+        {"ticker": "TATASTEEL.NS",  "name": "Tata Steel"},
+        {"ticker": "DRREDDY.NS",    "name": "Dr. Reddy's"},
+        {"ticker": "CIPLA.NS",      "name": "Cipla"},
+        {"ticker": "BAJAJ-AUTO.NS", "name": "Bajaj Auto"},
+        {"ticker": "EICHERMOT.NS",  "name": "Eicher Motors"},
+        {"ticker": "HEROMOTOCO.NS", "name": "Hero MotoCorp"},
+        {"ticker": "INDUSINDBK.NS", "name": "IndusInd Bank"},
+        {"ticker": "HINDALCO.NS",   "name": "Hindalco"},
+    ],
+    "mid": [
+        {"ticker": "PERSISTENT.NS", "name": "Persistent Systems"},
+        {"ticker": "COFORGE.NS",    "name": "Coforge"},
+        {"ticker": "MPHASIS.NS",    "name": "Mphasis"},
+        {"ticker": "LTIM.NS",       "name": "LTIMindtree"},
+        {"ticker": "TRENT.NS",      "name": "Trent"},
+        {"ticker": "ASTRAL.NS",     "name": "Astral"},
+        {"ticker": "PIIND.NS",      "name": "PI Industries"},
+        {"ticker": "DEEPAKNTR.NS",  "name": "Deepak Nitrite"},
+        {"ticker": "HAVELLS.NS",    "name": "Havells India"},
+        {"ticker": "VOLTAS.NS",     "name": "Voltas"},
+        {"ticker": "TORNTPHARM.NS", "name": "Torrent Pharma"},
+        {"ticker": "LUPIN.NS",      "name": "Lupin"},
+        {"ticker": "AUROPHARMA.NS", "name": "Aurobindo Pharma"},
+        {"ticker": "ALKEM.NS",      "name": "Alkem Lab"},
+        {"ticker": "BIOCON.NS",     "name": "Biocon"},
+        {"ticker": "OBEROIRLTY.NS", "name": "Oberoi Realty"},
+        {"ticker": "GODREJPROP.NS", "name": "Godrej Properties"},
+        {"ticker": "PRESTIGE.NS",   "name": "Prestige Estates"},
+        {"ticker": "MUTHOOTFIN.NS", "name": "Muthoot Finance"},
+        {"ticker": "SUNDARMFIN.NS", "name": "Sundaram Finance"},
+        {"ticker": "BANKBARODA.NS", "name": "Bank of Baroda"},
+        {"ticker": "IDFCFIRSTB.NS", "name": "IDFC First Bank"},
+        {"ticker": "FEDERALBNK.NS", "name": "Federal Bank"},
+        {"ticker": "BANDHANBNK.NS", "name": "Bandhan Bank"},
+        {"ticker": "RATNAMANI.NS",  "name": "Ratnamani Metals"},
+        {"ticker": "AIAENG.NS",     "name": "AIA Engineering"},
+        {"ticker": "CAMS.NS",       "name": "CAMS"},
+        {"ticker": "LALPATHLAB.NS", "name": "Dr. Lal PathLabs"},
+        {"ticker": "SCHAEFFLER.NS", "name": "Schaeffler India"},
+        {"ticker": "TIINDIA.NS",    "name": "Tube Investments"},
+    ],
+    "small": [
+        {"ticker": "IGL.NS",        "name": "Indraprastha Gas"},
+        {"ticker": "GMDC.NS",       "name": "Gujarat Mineral Devel."},
+        {"ticker": "IRCON.NS",      "name": "IRCON International"},
+        {"ticker": "RVNL.NS",       "name": "Rail Vikas Nigam"},
+        {"ticker": "NBCC.NS",       "name": "NBCC India"},
+        {"ticker": "MOIL.NS",       "name": "MOIL"},
+        {"ticker": "NATIONALUM.NS", "name": "National Aluminium"},
+        {"ticker": "HINDCOPPER.NS", "name": "Hindustan Copper"},
+        {"ticker": "SAIL.NS",       "name": "SAIL"},
+        {"ticker": "KEC.NS",        "name": "KEC International"},
+        {"ticker": "PNCINFRA.NS",   "name": "PNC Infratech"},
+        {"ticker": "KNRCON.NS",     "name": "KNR Constructions"},
+        {"ticker": "GRANULES.NS",   "name": "Granules India"},
+        {"ticker": "NATCOPHARM.NS", "name": "Natco Pharma"},
+        {"ticker": "IPCALAB.NS",    "name": "IPCA Labs"},
+        {"ticker": "GLENMARK.NS",   "name": "Glenmark Pharma"},
+        {"ticker": "EMAMILTD.NS",   "name": "Emami"},
+        {"ticker": "RADICO.NS",     "name": "Radico Khaitan"},
+        {"ticker": "SAREGAMA.NS",   "name": "Saregama India"},
+        {"ticker": "PVRINOX.NS",    "name": "PVR Inox"},
+        {"ticker": "NETWORK18.NS",  "name": "Network18 Media"},
+        {"ticker": "JINDALSAW.NS",  "name": "Jindal Saw"},
+        {"ticker": "WELCORP.NS",    "name": "Welspun Corp"},
+        {"ticker": "AJMERA.NS",     "name": "Ajmera Realty"},
+        {"ticker": "KOLTEPATIL.NS", "name": "Kolte-Patil Dev."},
+        {"ticker": "BRIGADE.NS",    "name": "Brigade Enterprises"},
+        {"ticker": "SUNTECK.NS",    "name": "Sunteck Realty"},
+        {"ticker": "CAMPUS.NS",     "name": "Campus Activewear"},
+        {"ticker": "DELHIVERY.NS",  "name": "Delhivery"},
+        {"ticker": "HAPPSTMNDS.NS", "name": "Happiest Minds"},
+    ],
+}
+
+_top_movers_cache: Dict[str, Any] = {}
+_TOP_MOVERS_TTL = 300  # 5 minutes
+
+
+@api_router.get("/market/top-movers")
+async def get_top_movers(cap: str = "large", filter: str = "gainers", limit: int = 6):
+    """Return top gainers or losers for a market cap category. Cached 5 min."""
+    global _top_movers_cache, _sector_stock_executor
+    cache_key = f"{cap}_{filter}"
+    now = datetime.now(timezone.utc).timestamp()
+
+    cached = _top_movers_cache.get(cache_key)
+    if cached and cached.get("ts", 0) + _TOP_MOVERS_TTL > now:
+        return {"stocks": cached["data"][:limit], "cached": True, "cap": cap, "filter": filter}
+
+    stocks_meta = _TOP_MOVERS_STOCKS.get(cap, _TOP_MOVERS_STOCKS["large"])
+
+    # Reuse sector stock executor
+    if _sector_stock_executor is None:
+        _sector_stock_executor = _TPE(max_workers=12)
+
+    loop = asyncio.get_event_loop()
+    tasks = [
+        loop.run_in_executor(_sector_stock_executor, _fetch_one_stock, meta)
+        for meta in stocks_meta
+    ]
+    results = await asyncio.gather(*tasks)
+    stocks = [r for r in results if r is not None and r.get("price") is not None]
+
+    # Sort gainers descending, losers ascending by change_pct
+    if filter == "gainers":
+        stocks = [s for s in stocks if s["change_pct"] > 0]
+        stocks.sort(key=lambda x: x["change_pct"], reverse=True)
+    else:
+        stocks = [s for s in stocks if s["change_pct"] < 0]
+        stocks.sort(key=lambda x: x["change_pct"])
+
+    _top_movers_cache[cache_key] = {"ts": now, "data": stocks}
+    return {"stocks": stocks[:limit], "cached": False, "cap": cap, "filter": filter}
+
+
 # ======================= SECTOR TRENDING =======================
 
 _SECTOR_MAP = [

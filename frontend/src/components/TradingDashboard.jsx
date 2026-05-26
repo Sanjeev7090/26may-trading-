@@ -38,6 +38,7 @@ import MonteCarloSimulation from './MonteCarloSimulation';
 import PaperTradingPanel from './PaperTradingPanel';
 import SectorTrending from './SectorTrending';
 import SectorStocksSheet from './SectorStocksSheet';
+import TopMoversWidget from './TopMoversWidget';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -570,6 +571,15 @@ const TradingDashboard = () => {
                 </div>
                 {/* Sector Trending — top NSE sector movers */}
                 <SectorTrending onSectorSelect={(sector) => setSectorSheet(sector)} />
+
+                {/* Top Movers Today */}
+                <TopMoversWidget onStockSelect={(stock) => {
+                  setSelectedStock({ ticker: stock.ticker, name: stock.name, type: 'stock' });
+                  const tf = { multiplier: 1, timespan: 'day', label: '1D' };
+                  setTimeframe(tf);
+                  fetchStockData(stock.ticker, tf);
+                  setMobilePanel('chart');
+                }} />
                 {signal && <div className="border-b border-white/10"><SignalDashboard signal={signal} /></div>}
                 {stockData && !isCrypto && <div className="border-b border-white/10"><SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} /></div>}
                 {selectedStock && selectedStock.type === 'INDEX' && <div className="border-b border-white/10"><OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} /></div>}
