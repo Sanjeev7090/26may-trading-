@@ -141,3 +141,12 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 - P2: Confluence alerts (2+ strategies align trigger)
 - P3: Multiple portfolio support
 - P3: Email/Push notification system
+
+### Stock Finder (Feb 2026)
+- **Full Universe Scan**: New "Finder" button in Auto Scanner header opens a modal that runs all 7 mini-strategies across the entire 120-stock NSE universe (40 large / 39 mid / 41 small caps).
+- **SSE Streaming**: Backend `GET /api/stock-finder/scan?cap={all|large|mid|small}` streams progress/result/done events via Server-Sent Events. Frontend uses `EventSource` to render results as they arrive.
+- **Concurrency**: Server runs 15 parallel scans (ThreadPoolExecutor) with batched yfinance fetches.
+- **UI Features**: Cap filter (All/Large/Mid/Small), direction filter (ALL/BUY/SELL), live progress bar with current symbol + counter, sortable table (default alphabetical asc), in-table search, BUY/SELL counters, click-row-to-load-chart (closes modal + selects ticker).
+- **Backend Schema**: result event = {ticker, name, cap, current_price, signals[], best_direction, best_entry, best_sl, best_target, best_confidence, strategies[]}. NaN/Infinity sanitized.
+- **Files**: `/app/backend/server.py` (lines 5390-5705: universe + SSE endpoint + `_scan_stock_for_finder`), `/app/frontend/src/components/StockFinderModal.jsx` (415 lines), `/app/frontend/src/components/AutoScanner.jsx` (Finder button + modal wiring).
+- **Tests**: `/app/backend/tests/test_stock_finder.py` — 11/11 PASSED (iteration_7).

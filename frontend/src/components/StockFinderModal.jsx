@@ -409,6 +409,6 @@ const StockFinderModal = ({ onClose, onStockSelect }) => {
 };
 
 // placeholder constant for display (overridden at runtime)
-const _UNIVERSE_COUNT = 113;
+const _UNIVERSE_COUNT = 120;
 
 export default StockFinderModal;
