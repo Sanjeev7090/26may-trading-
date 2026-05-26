@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import StockSearch from './StockSearch';
 import ChartPanel from './ChartPanel';
@@ -35,6 +35,7 @@ import GrowwPortfolio from './GrowwPortfolio';
 import IndicesTickerBar from './IndicesTickerBar';
 import TopOptionsSheet from './TopOptionsSheet';
 import MonteCarloSimulation from './MonteCarloSimulation';
+import PaperTradingPanel from './PaperTradingPanel';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -71,6 +72,8 @@ const TradingDashboard = () => {
   const [optionsSheet, setOptionsSheet] = useState(null); // { symbol, name } | null
   const [activeStrategy, setActiveStrategy] = useState(null); // Strategy type for overlay
   const [strategyData, setStrategyData] = useState(null); // Strategy analysis data
+  const [pendingPaperTrade, setPendingPaperTrade] = useState(null); // Paper trade from scanner/strategy
+  const [paperAutoExecute, setPaperAutoExecute] = useState(false); // Auto-execute paper trades
   const wsRef = useRef(null);
 
   // Handler for strategy analysis completion - updates chart overlays
@@ -78,6 +81,34 @@ const TradingDashboard = () => {
     setActiveStrategy(strategyType);
     setStrategyData(data);
   };
+
+  // Handler for paper trade from scanner signal button
+  const handlePaperTradeFromSignal = (signal) => {
+    setPendingPaperTrade({ ...signal, symbol: selectedStock?.ticker });
+    setActiveTab('paper');
+    setMobilePanel('right');
+  };
+
+  // Auto-execute paper trade handler (called when auto-execute is ON and new signal fires)
+  const handleAutoExecuteTrade = useCallback(async (signal) => {
+    if (!selectedStock) return;
+    try {
+      await axios.post(`${API}/paper-trade/order`, {
+        symbol: selectedStock.ticker,
+        name: selectedStock.name || selectedStock.ticker,
+        direction: signal.direction,
+        quantity: 10,
+        entry_price: signal.entry,
+        stop_loss: signal.stoploss,
+        target: signal.targets?.[0] || signal.day_target || signal.entry,
+        strategy: signal.strategy,
+        source: 'AUTO',
+      });
+      toast.success(`Auto Paper Trade: ${signal.direction} ${selectedStock.ticker} via ${signal.strategy}`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Auto trade failed');
+    }
+  }, [selectedStock]);
   useEffect(() => {
     const wsUrl = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws/prices';
     try {
@@ -393,6 +424,7 @@ const TradingDashboard = () => {
     { id: 'strategies', label: 'STRATEGIES' },
     { id: 'ghost', label: 'GHOST' },
     { id: 'montecarlo', label: 'MONTE CARLO' },
+    { id: 'paper', label: 'PAPER' },
   ];
 
   const leftTabs = [
@@ -599,7 +631,12 @@ const TradingDashboard = () => {
           {/* Tab Content */}
           <div className="flex-1 overflow-y-auto">
             {activeTab === 'scanner' && (
-              <AutoScanner selectedStock={selectedStock} />
+              <AutoScanner
+                selectedStock={selectedStock}
+                onPaperTrade={handlePaperTradeFromSignal}
+                autoExecute={paperAutoExecute}
+                onAutoExecuteTrade={handleAutoExecuteTrade}
+              />
             )}
 
             {activeTab === 'strategies' && (
@@ -637,6 +674,16 @@ const TradingDashboard = () => {
 
             {activeTab === 'montecarlo' && (
               <MonteCarloSimulation ticker={selectedStock?.ticker || selectedStock?.id} />
+            )}
+
+            {activeTab === 'paper' && (
+              <PaperTradingPanel
+                selectedStock={selectedStock}
+                pendingTrade={pendingPaperTrade}
+                onPendingTradeConsumed={() => setPendingPaperTrade(null)}
+                autoExecute={paperAutoExecute}
+                onAutoExecuteChange={setPaperAutoExecute}
+              />
             )}
           </div>
         </aside>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Lightning, Bell, X, TrendUp, TrendDown, Play, Pause, SpeakerHigh } from '@phosphor-icons/react';
+import { Lightning, Bell, X, TrendUp, TrendDown, Play, Pause, SpeakerHigh, CurrencyInr } from '@phosphor-icons/react';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -178,7 +178,7 @@ const ConfluenceMeter = ({ score, label, direction, aligned, total }) => {
 };
 
 // ---- Main AutoScanner Component ----
-const AutoScanner = ({ selectedStock }) => {
+const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTrade }) => {
   const [isActive, setIsActive] = useState(false);
   const [signals, setSignals] = useState([]);
   const [popupSignals, setPopupSignals] = useState([]);
@@ -188,6 +188,12 @@ const AutoScanner = ({ selectedStock }) => {
   const [confluenceData, setConfluenceData] = useState(null);
   const intervalRef = useRef(null);
   const seenSignalsRef = useRef(new Set());
+  const autoExecuteRef = useRef(autoExecute);
+  const onAutoExecuteTradeRef = useRef(onAutoExecuteTrade);
+
+  // Keep refs in sync without causing runScan to recreate
+  useEffect(() => { autoExecuteRef.current = autoExecute; }, [autoExecute]);
+  useEffect(() => { onAutoExecuteTradeRef.current = onAutoExecuteTrade; }, [onAutoExecuteTrade]);
 
   const isCrypto = selectedStock?.type === 'CRYPTO';
   const ticker = isCrypto ? selectedStock?.coin_id : selectedStock?.ticker;
@@ -223,6 +229,10 @@ const AutoScanner = ({ selectedStock }) => {
           setPopupSignals(prev => [...newSignals, ...prev].slice(0, 5));
           if (soundEnabled) {
             playAlertSound(newSignals[0].direction);
+          }
+          // Auto-execute paper trade if enabled
+          if (autoExecuteRef.current && onAutoExecuteTradeRef.current && newSignals.length > 0) {
+            onAutoExecuteTradeRef.current(newSignals[0]);
           }
         }
       } else {
@@ -367,7 +377,20 @@ const AutoScanner = ({ selectedStock }) => {
                         </span>
                         <span className="text-[9px] text-zinc-400">{sig.strategy}</span>
                       </div>
-                      <span className="text-[9px] text-zinc-500 font-mono">{sig.confidence}%</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[9px] text-zinc-500 font-mono">{sig.confidence}%</span>
+                        {onPaperTrade && (
+                          <button
+                            onClick={() => onPaperTrade(sig)}
+                            className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25 border border-yellow-500/20 transition-colors"
+                            data-testid={`paper-trade-btn-${idx}`}
+                            title="Paper Trade this signal"
+                          >
+                            <CurrencyInr size={8} weight="bold" />
+                            Trade
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2 text-[9px] font-mono">
                       <span className="text-zinc-400">Entry: <span className="text-white">{isCrypto ? '$' : ''}{sig.entry}</span></span>

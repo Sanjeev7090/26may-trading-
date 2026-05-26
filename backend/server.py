@@ -252,6 +252,21 @@ class AlertRule(BaseModel):
     alert_type: str  # 'price_above', 'price_below', 'demon_buy', 'demon_sell'
     threshold: Optional[float] = None
 
+# ---- Paper Trading Models ----
+class PaperOrderRequest(BaseModel):
+    symbol: str
+    name: str = ""
+    direction: str  # BUY or SELL
+    quantity: int
+    entry_price: float
+    stop_loss: float
+    target: float
+    strategy: str = "MANUAL"
+    source: str = "MANUAL"  # MANUAL or AUTO
+
+class PaperCloseRequest(BaseModel):
+    exit_price: float
+
 class AlertResponse(BaseModel):
     id: str
     ticker: str
@@ -5731,6 +5746,215 @@ async def portfolio_summary():
         "total_pnl_pct": round(total_pnl_pct, 2),
         "holdings_count": len(entries)
     }
+
+
+# ======================= PAPER TRADING =======================
+
+async def _ensure_paper_portfolio():
+    """Ensure paper portfolio doc exists in MongoDB, create if not."""
+    portfolio = await db.paper_portfolio.find_one({"portfolio_id": "default"}, {"_id": 0})
+    if not portfolio:
+        doc = {
+            "portfolio_id": "default",
+            "initial_balance": 500000.0,
+            "current_balance": 500000.0,
+            "realized_pnl": 0.0,
+            "total_trades": 0,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.paper_portfolio.insert_one(doc)
+        doc.pop("_id", None)
+        return doc
+    return portfolio
+
+
+@api_router.get("/paper-trade/portfolio")
+async def get_paper_portfolio():
+    """Get paper trading portfolio stats + unrealized P&L."""
+    portfolio = await _ensure_paper_portfolio()
+    open_positions = await db.paper_trades.find({"status": "OPEN"}, {"_id": 0}).to_list(100)
+
+    unrealized_pnl = 0.0
+    for pos in open_positions:
+        try:
+            ticker_obj = yf.Ticker(pos["symbol"])
+            hist = ticker_obj.history(period="1d")
+            if not hist.empty:
+                cp = float(hist["Close"].iloc[-1])
+                if pos["direction"] == "BUY":
+                    unrealized_pnl += (cp - pos["entry_price"]) * pos["quantity"]
+                else:
+                    unrealized_pnl += (pos["entry_price"] - cp) * pos["quantity"]
+        except Exception:
+            pass
+
+    total = portfolio.get("total_trades", 0)
+    wins = portfolio.get("winning_trades", 0)
+    win_rate = round(wins / total * 100, 1) if total > 0 else 0.0
+
+    return {
+        "portfolio_id": "default",
+        "initial_balance": portfolio["initial_balance"],
+        "current_balance": round(portfolio["current_balance"], 2),
+        "realized_pnl": round(portfolio.get("realized_pnl", 0.0), 2),
+        "unrealized_pnl": round(unrealized_pnl, 2),
+        "total_pnl": round(portfolio.get("realized_pnl", 0.0) + unrealized_pnl, 2),
+        "total_trades": total,
+        "winning_trades": wins,
+        "losing_trades": portfolio.get("losing_trades", 0),
+        "win_rate": win_rate,
+        "open_positions_count": len(open_positions),
+    }
+
+
+@api_router.post("/paper-trade/order", status_code=201)
+async def place_paper_order(req: PaperOrderRequest):
+    """Place a paper trade (manual or auto-executed from strategy signal)."""
+    portfolio = await _ensure_paper_portfolio()
+    invested = req.entry_price * req.quantity
+    if invested > portfolio["current_balance"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient balance. Available: ₹{portfolio['current_balance']:.2f}"
+        )
+
+    trade_id = str(uuid.uuid4())
+    doc = {
+        "trade_id": trade_id,
+        "symbol": req.symbol,
+        "name": req.name,
+        "direction": req.direction,
+        "quantity": req.quantity,
+        "entry_price": round(req.entry_price, 2),
+        "stop_loss": round(req.stop_loss, 2),
+        "target": round(req.target, 2),
+        "invested_amount": round(invested, 2),
+        "status": "OPEN",
+        "strategy": req.strategy,
+        "source": req.source,
+        "entry_time": datetime.now(timezone.utc).isoformat(),
+        "exit_time": None,
+        "exit_price": None,
+        "pnl": None,
+        "pnl_pct": None,
+    }
+    await db.paper_trades.insert_one(doc)
+    doc.pop("_id", None)
+
+    new_balance = portfolio["current_balance"] - invested
+    await db.paper_portfolio.update_one(
+        {"portfolio_id": "default"},
+        {"$set": {"current_balance": round(new_balance, 2)}}
+    )
+    return doc
+
+
+@api_router.get("/paper-trade/positions")
+async def get_paper_positions():
+    """Open positions with live current price + unrealized P&L."""
+    positions = await db.paper_trades.find({"status": "OPEN"}, {"_id": 0}).to_list(100)
+    for pos in positions:
+        try:
+            ticker_obj = yf.Ticker(pos["symbol"])
+            hist = ticker_obj.history(period="1d")
+            if not hist.empty:
+                cp = round(float(hist["Close"].iloc[-1]), 2)
+                pos["current_price"] = cp
+                if pos["direction"] == "BUY":
+                    pnl = (cp - pos["entry_price"]) * pos["quantity"]
+                else:
+                    pnl = (pos["entry_price"] - cp) * pos["quantity"]
+                pos["pnl"] = round(pnl, 2)
+                pos["pnl_pct"] = round(pnl / pos["invested_amount"] * 100, 2) if pos["invested_amount"] > 0 else 0.0
+            else:
+                pos["current_price"] = pos["entry_price"]
+                pos["pnl"] = 0.0
+                pos["pnl_pct"] = 0.0
+        except Exception:
+            pos["current_price"] = pos["entry_price"]
+            pos["pnl"] = 0.0
+            pos["pnl_pct"] = 0.0
+    return {"positions": positions}
+
+
+@api_router.get("/paper-trade/history")
+async def get_paper_history():
+    """Closed trade history (CLOSED / SL_HIT / TARGET_HIT)."""
+    trades = await db.paper_trades.find(
+        {"status": {"$in": ["CLOSED", "SL_HIT", "TARGET_HIT"]}},
+        {"_id": 0}
+    ).sort("exit_time", -1).to_list(200)
+    return {"trades": trades}
+
+
+@api_router.put("/paper-trade/close/{trade_id}")
+async def close_paper_trade(trade_id: str, req: PaperCloseRequest):
+    """Close an open paper position at the given exit price."""
+    pos = await db.paper_trades.find_one({"trade_id": trade_id, "status": "OPEN"}, {"_id": 0})
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found or already closed")
+
+    ep = req.exit_price
+    if pos["direction"] == "BUY":
+        pnl = (ep - pos["entry_price"]) * pos["quantity"]
+    else:
+        pnl = (pos["entry_price"] - ep) * pos["quantity"]
+
+    pnl_pct = round(pnl / pos["invested_amount"] * 100, 2) if pos["invested_amount"] > 0 else 0.0
+
+    # Determine exit reason
+    sl = pos.get("stop_loss", 0)
+    tgt = pos.get("target", 0)
+    if pos["direction"] == "BUY":
+        status = "SL_HIT" if ep <= sl else ("TARGET_HIT" if ep >= tgt else "CLOSED")
+    else:
+        status = "SL_HIT" if ep >= sl else ("TARGET_HIT" if ep <= tgt else "CLOSED")
+
+    exit_time = datetime.now(timezone.utc).isoformat()
+    returned_amount = pos["invested_amount"] + pnl
+
+    await db.paper_trades.update_one(
+        {"trade_id": trade_id},
+        {"$set": {
+            "status": status,
+            "exit_price": round(ep, 2),
+            "exit_time": exit_time,
+            "pnl": round(pnl, 2),
+            "pnl_pct": pnl_pct,
+        }}
+    )
+
+    portfolio = await _ensure_paper_portfolio()
+    await db.paper_portfolio.update_one(
+        {"portfolio_id": "default"},
+        {"$set": {
+            "current_balance": round(portfolio["current_balance"] + returned_amount, 2),
+            "realized_pnl": round(portfolio.get("realized_pnl", 0.0) + pnl, 2),
+            "total_trades": portfolio.get("total_trades", 0) + 1,
+            "winning_trades": portfolio.get("winning_trades", 0) + (1 if pnl > 0 else 0),
+            "losing_trades": portfolio.get("losing_trades", 0) + (1 if pnl <= 0 else 0),
+        }}
+    )
+
+    return {
+        "trade_id": trade_id,
+        "status": status,
+        "exit_price": round(ep, 2),
+        "pnl": round(pnl, 2),
+        "pnl_pct": pnl_pct,
+        "exit_time": exit_time,
+    }
+
+
+@api_router.post("/paper-trade/reset")
+async def reset_paper_portfolio():
+    """Reset paper trading portfolio back to ₹5,00,000 and clear all trades."""
+    await db.paper_trades.delete_many({})
+    await db.paper_portfolio.delete_many({"portfolio_id": "default"})
+    portfolio = await _ensure_paper_portfolio()
+    return {"message": "Portfolio reset to ₹5,00,000", "portfolio": portfolio}
 
 
 # ======================= ALERTS =======================
