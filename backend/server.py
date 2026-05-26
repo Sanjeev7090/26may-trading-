@@ -5812,13 +5812,16 @@ async def get_paper_portfolio():
 
 @api_router.post("/paper-trade/order", status_code=201)
 async def place_paper_order(req: PaperOrderRequest):
-    """Place a paper trade (manual or auto-executed from strategy signal)."""
+    """Place a paper trade with fixed 5x leverage — only margin (1/5th) deducted from balance."""
+    LEVERAGE = 5
     portfolio = await _ensure_paper_portfolio()
-    invested = req.entry_price * req.quantity
-    if invested > portfolio["current_balance"]:
+    position_value = round(req.entry_price * req.quantity, 2)
+    margin_used = round(position_value / LEVERAGE, 2)
+
+    if margin_used > portfolio["current_balance"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Insufficient balance. Available: ₹{portfolio['current_balance']:.2f}"
+            detail=f"Insufficient margin. Required: ₹{margin_used:.2f}, Available: ₹{portfolio['current_balance']:.2f}"
         )
 
     trade_id = str(uuid.uuid4())
@@ -5831,7 +5834,9 @@ async def place_paper_order(req: PaperOrderRequest):
         "entry_price": round(req.entry_price, 2),
         "stop_loss": round(req.stop_loss, 2),
         "target": round(req.target, 2),
-        "invested_amount": round(invested, 2),
+        "invested_amount": position_value,   # full position value
+        "margin_used": margin_used,           # actual balance deducted (1/5th)
+        "leverage": LEVERAGE,
         "status": "OPEN",
         "strategy": req.strategy,
         "source": req.source,
@@ -5844,7 +5849,7 @@ async def place_paper_order(req: PaperOrderRequest):
     await db.paper_trades.insert_one(doc)
     doc.pop("_id", None)
 
-    new_balance = portfolio["current_balance"] - invested
+    new_balance = portfolio["current_balance"] - margin_used
     await db.paper_portfolio.update_one(
         {"portfolio_id": "default"},
         {"$set": {"current_balance": round(new_balance, 2)}}
@@ -5854,9 +5859,10 @@ async def place_paper_order(req: PaperOrderRequest):
 
 @api_router.get("/paper-trade/positions")
 async def get_paper_positions():
-    """Open positions with live current price + unrealized P&L."""
+    """Open positions with live current price + unrealized P&L (on margin basis, 5x leverage)."""
     positions = await db.paper_trades.find({"status": "OPEN"}, {"_id": 0}).to_list(100)
     for pos in positions:
+        margin = pos.get("margin_used") or pos.get("invested_amount", 1)
         try:
             ticker_obj = yf.Ticker(pos["symbol"])
             hist = ticker_obj.history(period="1d")
@@ -5868,7 +5874,7 @@ async def get_paper_positions():
                 else:
                     pnl = (pos["entry_price"] - cp) * pos["quantity"]
                 pos["pnl"] = round(pnl, 2)
-                pos["pnl_pct"] = round(pnl / pos["invested_amount"] * 100, 2) if pos["invested_amount"] > 0 else 0.0
+                pos["pnl_pct"] = round(pnl / margin * 100, 2) if margin > 0 else 0.0
             else:
                 pos["current_price"] = pos["entry_price"]
                 pos["pnl"] = 0.0
@@ -5903,8 +5909,6 @@ async def close_paper_trade(trade_id: str, req: PaperCloseRequest):
     else:
         pnl = (pos["entry_price"] - ep) * pos["quantity"]
 
-    pnl_pct = round(pnl / pos["invested_amount"] * 100, 2) if pos["invested_amount"] > 0 else 0.0
-
     # Determine exit reason
     sl = pos.get("stop_loss", 0)
     tgt = pos.get("target", 0)
@@ -5914,7 +5918,11 @@ async def close_paper_trade(trade_id: str, req: PaperCloseRequest):
         status = "SL_HIT" if ep >= sl else ("TARGET_HIT" if ep <= tgt else "CLOSED")
 
     exit_time = datetime.now(timezone.utc).isoformat()
-    returned_amount = pos["invested_amount"] + pnl
+    margin = pos.get("margin_used") or pos.get("invested_amount", 0)
+    returned_amount = margin + pnl  # return margin + realized gain/loss
+
+    # P&L% on margin basis (shows leverage effect)
+    pnl_pct = round(pnl / margin * 100, 2) if margin > 0 else 0.0
 
     await db.paper_trades.update_one(
         {"trade_id": trade_id},

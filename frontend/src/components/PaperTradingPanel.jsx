@@ -40,6 +40,7 @@ const PositionRow = ({ pos, onClose }) => {
           {pos.source === 'AUTO' && (
             <span className="text-[7px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-400 font-bold">AUTO</span>
           )}
+          <span className="text-[7px] px-1 py-0.5 rounded bg-yellow-500/20 text-yellow-400 font-bold border border-yellow-500/20">5x</span>
         </div>
         <button
           onClick={() => onClose(pos)}
@@ -61,8 +62,8 @@ const PositionRow = ({ pos, onClose }) => {
           <span className="text-zinc-300">₹{pos.current_price || pos.entry_price}</span>
         </div>
         <div>
-          <span className="text-zinc-600 block">Qty</span>
-          <span className="text-zinc-300">{pos.quantity}</span>
+          <span className="text-zinc-600 block">Margin</span>
+          <span className="text-yellow-400">₹{pos.margin_used?.toFixed(0) ?? pos.invested_amount?.toFixed(0)}</span>
         </div>
       </div>
 
@@ -324,6 +325,7 @@ const PaperTradingPanel = ({ selectedStock, pendingTrade, onPendingTradeConsumed
             <div className="flex items-center gap-2">
               <Wallet size={13} className="text-[#00E676]" weight="fill" />
               <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-300">Paper Trading</span>
+              <span className="text-[8px] px-1.5 py-0.5 rounded font-black bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">5x</span>
             </div>
             <div className="flex items-center gap-2">
               {/* Auto Execute Toggle */}
@@ -565,7 +567,20 @@ const PaperTradingPanel = ({ selectedStock, pendingTrade, onPendingTradeConsumed
 
               {/* Risk/Reward preview */}
               {form.entry_price && form.stop_loss && form.target && (
-                <div className="bg-white/[0.03] border border-white/8 rounded-lg p-2.5">
+                <div className="bg-white/[0.03] border border-white/8 rounded-lg p-2.5 space-y-1.5">
+                  {/* Leverage margin info */}
+                  {form.entry_price && form.quantity && (
+                    <div className="flex items-center justify-between text-[9px] pb-1.5 border-b border-white/8">
+                      <div className="flex items-center gap-1">
+                        <span className="text-yellow-400 font-black">5x</span>
+                        <span className="text-zinc-500">Leverage</span>
+                      </div>
+                      <div className="flex items-center gap-3 font-mono">
+                        <span className="text-zinc-500">Position: <span className="text-zinc-300">₹{(parseFloat(form.entry_price || 0) * parseInt(form.quantity || 1)).toFixed(0)}</span></span>
+                        <span className="text-zinc-500">Margin: <span className="text-yellow-400 font-bold">₹{(parseFloat(form.entry_price || 0) * parseInt(form.quantity || 1) / 5).toFixed(0)}</span></span>
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-2 text-[9px] font-mono text-center">
                     <div>
                       <span className="text-zinc-600 block">Risk</span>
