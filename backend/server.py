@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -5650,13 +5650,14 @@ def _scan_stock_for_finder(stock_meta: Dict) -> Optional[Dict]:
 
 
 @api_router.get("/stock-finder/scan")
-async def stock_finder_scan(cap: str = "all"):
+async def stock_finder_scan(request: Request, cap: str = "all"):
     """
     SSE endpoint — streams scan results for every stock in the universe.
     Each event is JSON:
       {type: 'progress', current, total, symbol}
       {type: 'result',   ticker, name, ...}
       {type: 'done',     total_found, total_scanned}
+    Aborts cleanly if client disconnects.
     """
     from fastapi.responses import StreamingResponse as _StreamResp
     global _stock_finder_executor
@@ -5676,12 +5677,18 @@ async def stock_finder_scan(cap: str = "all"):
         batch_sz = 15
 
         for batch_start in range(0, total, batch_sz):
+            # Stop early if client closed the connection
+            if await request.is_disconnected():
+                return
+
             batch   = universe[batch_start: batch_start + batch_sz]
             tasks   = [loop.run_in_executor(_stock_finder_executor, _scan_stock_for_finder, s)
                        for s in batch]
             results = await asyncio.gather(*tasks)
 
             for j, result in enumerate(results):
+                if await request.is_disconnected():
+                    return
                 idx    = batch_start + j
                 sym    = universe[idx]["ticker"]
                 # ---- progress event ----

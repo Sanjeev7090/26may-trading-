@@ -382,7 +382,7 @@ const ChartPanel = ({
         
         {/* Timeframe Levels - Always visible */}
         <TimeframeLevels 
-          chart={chartRef.current}
+          series={candlestickSeriesRef.current}
           bars={stockData?.bars}
         />
       </div>

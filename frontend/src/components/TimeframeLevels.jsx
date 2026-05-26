@@ -4,15 +4,15 @@ import { useEffect, useRef } from 'react';
  * TimeframeLevels - Draws permanent high/low levels for multiple timeframes
  * Always visible on chart, updates when stock changes
  */
-const TimeframeLevels = ({ chart, bars }) => {
+const TimeframeLevels = ({ series, bars }) => {
   const priceLines = useRef([]);
 
   // Clear all price lines
   const clearLines = () => {
     priceLines.current.forEach(line => {
       try {
-        if (chart && line) {
-          chart.removePriceLine(line);
+        if (series && line) {
+          series.removePriceLine(line);
         }
       } catch (e) {}
     });
@@ -32,7 +32,7 @@ const TimeframeLevels = ({ chart, bars }) => {
 
   // Draw timeframe levels
   useEffect(() => {
-    if (!chart || !bars || bars.length === 0) {
+    if (!series || !bars || bars.length === 0) {
       clearLines();
       return;
     }
@@ -80,7 +80,7 @@ const TimeframeLevels = ({ chart, bars }) => {
         const price = tf.type === 'high' ? high : low;
         
         if (price > 0) {
-          const line = chart.addPriceLine({
+          const line = series.createPriceLine({
             price: price,
             color: tf.color,
             lineWidth: 1,
@@ -97,7 +97,7 @@ const TimeframeLevels = ({ chart, bars }) => {
     });
 
     return () => clearLines();
-  }, [chart, bars]);
+  }, [series, bars]);
 
   return null; // No DOM rendering
 };
