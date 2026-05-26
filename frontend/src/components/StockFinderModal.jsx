@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, MagnifyingGlass, TrendUp, TrendDown, Lightning, SortAscending, SortDescending, DownloadSimple, WhatsappLogo, TelegramLogo } from '@phosphor-icons/react';
+import { X, MagnifyingGlass, TrendUp, TrendDown, Lightning, SortAscending, SortDescending, DownloadSimple, WhatsappLogo, TelegramLogo, BroadcastIcon } from '@phosphor-icons/react';
+import TelegramChannelsPanel from './TelegramChannelsPanel';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 

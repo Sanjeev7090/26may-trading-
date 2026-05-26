@@ -5712,6 +5712,246 @@ async def stock_finder_scan(request: Request, cap: str = "all"):
     )
 
 
+# =============================================================================
+# Telegram Channel Auto-Post for Stock Finder
+# =============================================================================
+
+from pydantic import BaseModel as _BM
+
+
+class TelegramChannelIn(_BM):
+    name: str
+    bot_token: str
+    chat_id: str
+    enabled: bool = True
+
+
+class TelegramSendRequest(_BM):
+    channel_ids: List[str]
+    results: List[Dict[str, Any]]
+
+
+def _mask_token(t: str) -> str:
+    if not t or len(t) < 10:
+        return "***"
+    return f"{t[:6]}…{t[-4:]}"
+
+
+def _format_telegram_message(results: List[Dict[str, Any]]) -> str:
+    """Build a single Markdown message with date header + BUY/SELL sections."""
+    from datetime import datetime
+    today = datetime.now().strftime("%d %b %Y")
+    buys  = [r for r in results if r.get("best_direction") == "BUY"]
+    sells = [r for r in results if r.get("best_direction") == "SELL"]
+    # Sort each group by confidence desc
+    buys.sort(key=lambda r: r.get("best_confidence", 0), reverse=True)
+    sells.sort(key=lambda r: r.get("best_confidence", 0), reverse=True)
+
+    lines = [
+        f"📊 *Gann Trader — Stock Finder*",
+        f"_{today} · {len(results)} setups_",
+        "",
+    ]
+
+    def _row(i: int, r: Dict[str, Any]) -> str:
+        sym = str(r.get("ticker", "")).replace(".NS", "").replace(".BO", "")
+        return (
+            f"{i}. *{sym}*  ·  {r.get('best_confidence', 0)}%\n"
+            f"   Entry `₹{r.get('best_entry', '—')}` · SL `₹{r.get('best_sl', '—')}` · TGT `₹{r.get('best_target', '—')}`"
+        )
+
+    if buys:
+        lines.append(f"🟢 *BUYS ({len(buys)})*")
+        for i, r in enumerate(buys, 1):
+            lines.append(_row(i, r))
+        lines.append("")
+    if sells:
+        lines.append(f"🔴 *SELLS ({len(sells)})*")
+        for i, r in enumerate(sells, 1):
+            lines.append(_row(i, r))
+
+    return "\n".join(lines).strip()
+
+
+def _split_for_telegram(text: str, limit: int = 3900) -> List[str]:
+    """Telegram message limit is 4096 chars; split on blank lines to be safe."""
+    if len(text) <= limit:
+        return [text]
+    chunks: List[str] = []
+    buf: List[str] = []
+    size = 0
+    for para in text.split("\n"):
+        plen = len(para) + 1
+        if size + plen > limit and buf:
+            chunks.append("\n".join(buf))
+            buf, size = [], 0
+        buf.append(para)
+        size += plen
+    if buf:
+        chunks.append("\n".join(buf))
+    return chunks
+
+
+async def _send_telegram_message(bot_token: str, chat_id: str, text: str) -> Dict[str, Any]:
+    """POST to Telegram Bot API. Returns {ok, ...} or raises Exception."""
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(url, json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        })
+        try:
+            data = r.json()
+        except Exception:
+            data = {"ok": False, "description": f"HTTP {r.status_code}"}
+        return data
+
+
+@api_router.get("/stock-finder/telegram-channels")
+async def list_telegram_channels():
+    """List saved Telegram channel configs (bot token masked for safety)."""
+    docs = await db.telegram_channels.find({}).to_list(50)
+    out = []
+    for d in docs:
+        out.append({
+            "id":        str(d["_id"]),
+            "name":      d.get("name", ""),
+            "chat_id":   d.get("chat_id", ""),
+            "bot_token_preview": _mask_token(d.get("bot_token", "")),
+            "enabled":   d.get("enabled", True),
+            "created_at": d.get("created_at", ""),
+        })
+    return {"channels": out}
+
+
+@api_router.post("/stock-finder/telegram-channels")
+async def create_telegram_channel(payload: TelegramChannelIn):
+    """Save a new Telegram channel."""
+    from datetime import datetime
+    doc = {
+        "name":       payload.name.strip() or "Untitled",
+        "bot_token":  payload.bot_token.strip(),
+        "chat_id":    payload.chat_id.strip(),
+        "enabled":    bool(payload.enabled),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    res = await db.telegram_channels.insert_one(doc)
+    return {"ok": True, "id": str(res.inserted_id)}
+
+
+@api_router.put("/stock-finder/telegram-channels/{channel_id}")
+async def update_telegram_channel(channel_id: str, payload: TelegramChannelIn):
+    """Update a channel (full replace of editable fields)."""
+    from bson import ObjectId
+    try:
+        _id = ObjectId(channel_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid channel id")
+    updates = {
+        "name":      payload.name.strip() or "Untitled",
+        "bot_token": payload.bot_token.strip(),
+        "chat_id":   payload.chat_id.strip(),
+        "enabled":   bool(payload.enabled),
+    }
+    res = await db.telegram_channels.update_one({"_id": _id}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    return {"ok": True}
+
+
+@api_router.delete("/stock-finder/telegram-channels/{channel_id}")
+async def delete_telegram_channel(channel_id: str):
+    """Delete a saved channel."""
+    from bson import ObjectId
+    try:
+        _id = ObjectId(channel_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid channel id")
+    res = await db.telegram_channels.delete_one({"_id": _id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    return {"ok": True}
+
+
+@api_router.post("/stock-finder/telegram-test/{channel_id}")
+async def test_telegram_channel(channel_id: str):
+    """Send a small test message to validate bot token + chat_id."""
+    from bson import ObjectId
+    try:
+        _id = ObjectId(channel_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid channel id")
+    doc = await db.telegram_channels.find_one({"_id": _id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    msg = "✅ *Gann Trader connected*\nYour bot can post Stock Finder setups here."
+    try:
+        resp = await _send_telegram_message(doc["bot_token"], doc["chat_id"], msg)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": bool(resp.get("ok")), "telegram": resp}
+
+
+@api_router.post("/stock-finder/telegram-send")
+async def send_telegram_results(payload: TelegramSendRequest):
+    """Send a Stock Finder result batch to one or more saved channels."""
+    from bson import ObjectId
+    if not payload.results:
+        raise HTTPException(status_code=400, detail="No results to send")
+    if not payload.channel_ids:
+        raise HTTPException(status_code=400, detail="No channels selected")
+
+    # Fetch only the requested channels that are enabled
+    object_ids = []
+    for cid in payload.channel_ids:
+        try:
+            object_ids.append(ObjectId(cid))
+        except Exception:
+            continue
+    if not object_ids:
+        raise HTTPException(status_code=400, detail="Invalid channel ids")
+
+    docs = await db.telegram_channels.find(
+        {"_id": {"$in": object_ids}, "enabled": True}
+    ).to_list(50)
+
+    if not docs:
+        raise HTTPException(status_code=404, detail="No enabled channels found")
+
+    message  = _format_telegram_message(payload.results)
+    chunks   = _split_for_telegram(message)
+    report   = []
+
+    for d in docs:
+        per_channel = {"id": str(d["_id"]), "name": d.get("name", ""), "ok": True,
+                       "messages": 0, "errors": []}
+        for chunk in chunks:
+            try:
+                resp = await _send_telegram_message(d["bot_token"], d["chat_id"], chunk)
+                if resp.get("ok"):
+                    per_channel["messages"] += 1
+                else:
+                    per_channel["ok"] = False
+                    per_channel["errors"].append(resp.get("description", "Unknown error"))
+            except Exception as e:
+                per_channel["ok"] = False
+                per_channel["errors"].append(str(e))
+        report.append(per_channel)
+
+    return {
+        "ok": all(r["ok"] for r in report),
+        "channels_sent": len([r for r in report if r["ok"]]),
+        "total_channels": len(report),
+        "chunks_per_channel": len(chunks),
+        "results": report,
+    }
+
+
+
+
+
 @api_router.get("/auto-scan/{ticker}")
 async def auto_scan_ticker(ticker: str):
     """Auto-scan a ticker with ALL strategies and return active signals."""
