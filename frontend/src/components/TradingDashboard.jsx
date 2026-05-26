@@ -37,6 +37,7 @@ import TopOptionsSheet from './TopOptionsSheet';
 import MonteCarloSimulation from './MonteCarloSimulation';
 import PaperTradingPanel from './PaperTradingPanel';
 import SectorTrending from './SectorTrending';
+import SectorStocksSheet from './SectorStocksSheet';
 import { Toaster, toast } from 'sonner';
 import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
 
@@ -75,6 +76,7 @@ const TradingDashboard = () => {
   const [strategyData, setStrategyData] = useState(null); // Strategy analysis data
   const [pendingPaperTrade, setPendingPaperTrade] = useState(null); // Paper trade from scanner/strategy
   const [paperAutoExecute, setPaperAutoExecute] = useState(false); // Auto-execute paper trades
+  const [sectorSheet, setSectorSheet] = useState(null); // sector obj for stocks sheet
   const wsRef = useRef(null);
 
   // Handler for strategy analysis completion - updates chart overlays
@@ -567,15 +569,7 @@ const TradingDashboard = () => {
                   <RegulatoryWatchdogPanel />
                 </div>
                 {/* Sector Trending — top NSE sector movers */}
-                <SectorTrending onSectorSelect={(sector) => {
-                  // Load the sector index chart when clicked
-                  const stockObj = { ticker: sector.ticker, name: sector.name, type: 'INDEX' };
-                  setSelectedStock(stockObj);
-                  const tf = { multiplier: 1, timespan: 'day', label: '1D' };
-                  setTimeframe(tf);
-                  fetchStockData(sector.ticker, tf);
-                  setMobilePanel('chart');
-                }} />
+                <SectorTrending onSectorSelect={(sector) => setSectorSheet(sector)} />
                 {signal && <div className="border-b border-white/10"><SignalDashboard signal={signal} /></div>}
                 {stockData && !isCrypto && <div className="border-b border-white/10"><SquareOf9Calculator currentPrice={stockData.bars[stockData.bars.length - 1]?.close} /></div>}
                 {selectedStock && selectedStock.type === 'INDEX' && <div className="border-b border-white/10"><OIAnalysis symbol={selectedStock.ticker.replace('.NS', '')} /></div>}
@@ -715,6 +709,21 @@ const TradingDashboard = () => {
           name={optionsSheet.name}
           onClose={() => setOptionsSheet(null)}
           onOptionSelect={handleOptionSelect}
+        />
+      )}
+
+      {/* Sector Stocks Sheet (opens when a sector is clicked) */}
+      {sectorSheet && (
+        <SectorStocksSheet
+          sector={sectorSheet}
+          onClose={() => setSectorSheet(null)}
+          onStockSelect={(stock) => {
+            setSelectedStock({ ticker: stock.ticker, name: stock.name, type: 'stock' });
+            const tf = { multiplier: 1, timespan: 'day', label: '1D' };
+            setTimeframe(tf);
+            fetchStockData(stock.ticker, tf);
+            setMobilePanel('chart');
+          }}
         />
       )}
     </>)}

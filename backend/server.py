@@ -5765,6 +5765,270 @@ _SECTOR_MAP = [
     {"name": "NIFTY MIDCAP",  "ticker": "^NSEMDCP50",  "icon": "midcap"},
 ]
 
+# ---- NSE Sector Constituents ----
+_SECTOR_STOCKS: Dict[str, List[Dict]] = {
+    "bank": [
+        {"ticker": "HDFCBANK.NS",   "name": "HDFC Bank"},
+        {"ticker": "ICICIBANK.NS",  "name": "ICICI Bank"},
+        {"ticker": "SBIN.NS",       "name": "State Bank of India"},
+        {"ticker": "AXISBANK.NS",   "name": "Axis Bank"},
+        {"ticker": "KOTAKBANK.NS",  "name": "Kotak Mahindra Bank"},
+        {"ticker": "INDUSINDBK.NS", "name": "IndusInd Bank"},
+        {"ticker": "BANDHANBNK.NS", "name": "Bandhan Bank"},
+        {"ticker": "FEDERALBNK.NS", "name": "Federal Bank"},
+        {"ticker": "IDFCFIRSTB.NS", "name": "IDFC First Bank"},
+        {"ticker": "PNB.NS",        "name": "Punjab National Bank"},
+        {"ticker": "BANKBARODA.NS", "name": "Bank of Baroda"},
+        {"ticker": "CANARABANK.NS", "name": "Canara Bank"},
+        {"ticker": "AUBANK.NS",     "name": "AU Small Finance Bank"},
+        {"ticker": "RBLBANK.NS",    "name": "RBL Bank"},
+        {"ticker": "YESBANK.NS",    "name": "Yes Bank"},
+    ],
+    "it": [
+        {"ticker": "TCS.NS",        "name": "Tata Consultancy Services"},
+        {"ticker": "INFY.NS",       "name": "Infosys"},
+        {"ticker": "WIPRO.NS",      "name": "Wipro"},
+        {"ticker": "HCLTECH.NS",    "name": "HCL Technologies"},
+        {"ticker": "TECHM.NS",      "name": "Tech Mahindra"},
+        {"ticker": "LTIM.NS",       "name": "LTIMindtree"},
+        {"ticker": "MPHASIS.NS",    "name": "Mphasis"},
+        {"ticker": "COFORGE.NS",    "name": "Coforge"},
+        {"ticker": "PERSISTENT.NS", "name": "Persistent Systems"},
+        {"ticker": "OFSS.NS",       "name": "Oracle Financial Services"},
+        {"ticker": "KPITTECH.NS",   "name": "KPIT Technologies"},
+        {"ticker": "TATAELXSI.NS",  "name": "Tata Elxsi"},
+        {"ticker": "HEXAWARE.NS",   "name": "Hexaware Technologies"},
+        {"ticker": "NIITLTD.NS",    "name": "NIIT"},
+        {"ticker": "SONATSOFTW.NS", "name": "Sonata Software"},
+    ],
+    "auto": [
+        {"ticker": "MARUTI.NS",     "name": "Maruti Suzuki"},
+        {"ticker": "TATAMOTORS.NS", "name": "Tata Motors"},
+        {"ticker": "EICHERMOT.NS",  "name": "Eicher Motors"},
+        {"ticker": "BAJAJ-AUTO.NS", "name": "Bajaj Auto"},
+        {"ticker": "HEROMOTOCO.NS", "name": "Hero MotoCorp"},
+        {"ticker": "M&M.NS",        "name": "Mahindra & Mahindra"},
+        {"ticker": "TVSMOTOR.NS",   "name": "TVS Motor"},
+        {"ticker": "ASHOKLEY.NS",   "name": "Ashok Leyland"},
+        {"ticker": "BALKRISIND.NS", "name": "Balkrishna Industries"},
+        {"ticker": "BHARATFORG.NS", "name": "Bharat Forge"},
+        {"ticker": "MOTHERSON.NS",  "name": "Samvardhana Motherson"},
+        {"ticker": "BOSCHLTD.NS",   "name": "Bosch"},
+        {"ticker": "AMARAJABAT.NS", "name": "Amara Raja Energy"},
+        {"ticker": "EXIDEIND.NS",   "name": "Exide Industries"},
+        {"ticker": "TIINDIA.NS",    "name": "Tube Investments"},
+    ],
+    "pharma": [
+        {"ticker": "SUNPHARMA.NS",  "name": "Sun Pharmaceutical"},
+        {"ticker": "DRREDDY.NS",    "name": "Dr. Reddy's Laboratories"},
+        {"ticker": "CIPLA.NS",      "name": "Cipla"},
+        {"ticker": "DIVISLAB.NS",   "name": "Divi's Laboratories"},
+        {"ticker": "AUROPHARMA.NS", "name": "Aurobindo Pharma"},
+        {"ticker": "LUPIN.NS",      "name": "Lupin"},
+        {"ticker": "BIOCON.NS",     "name": "Biocon"},
+        {"ticker": "ALKEM.NS",      "name": "Alkem Laboratories"},
+        {"ticker": "TORNTPHARM.NS", "name": "Torrent Pharmaceuticals"},
+        {"ticker": "ABBOTINDIA.NS", "name": "Abbott India"},
+        {"ticker": "IPCALAB.NS",    "name": "IPCA Laboratories"},
+        {"ticker": "GLENMARK.NS",   "name": "Glenmark Pharma"},
+        {"ticker": "ZYDUSLIFE.NS",  "name": "Zydus Lifesciences"},
+        {"ticker": "NATCOPHARM.NS", "name": "Natco Pharma"},
+        {"ticker": "GRANULES.NS",   "name": "Granules India"},
+    ],
+    "fmcg": [
+        {"ticker": "HINDUNILVR.NS", "name": "Hindustan Unilever"},
+        {"ticker": "ITC.NS",        "name": "ITC"},
+        {"ticker": "NESTLEIND.NS",  "name": "Nestle India"},
+        {"ticker": "BRITANNIA.NS",  "name": "Britannia Industries"},
+        {"ticker": "DABUR.NS",      "name": "Dabur India"},
+        {"ticker": "MARICO.NS",     "name": "Marico"},
+        {"ticker": "COLPAL.NS",     "name": "Colgate-Palmolive India"},
+        {"ticker": "GODREJCP.NS",   "name": "Godrej Consumer Products"},
+        {"ticker": "EMAMILTD.NS",   "name": "Emami"},
+        {"ticker": "MCDOWELL-N.NS", "name": "United Spirits"},
+        {"ticker": "VBL.NS",        "name": "Varun Beverages"},
+        {"ticker": "PATANJALI.NS",  "name": "Patanjali Foods"},
+        {"ticker": "RADICO.NS",     "name": "Radico Khaitan"},
+        {"ticker": "TATACONSUM.NS", "name": "Tata Consumer Products"},
+        {"ticker": "PGHH.NS",       "name": "Procter & Gamble Hygiene"},
+    ],
+    "metal": [
+        {"ticker": "TATASTEEL.NS",  "name": "Tata Steel"},
+        {"ticker": "HINDALCO.NS",   "name": "Hindalco Industries"},
+        {"ticker": "JSWSTEEL.NS",   "name": "JSW Steel"},
+        {"ticker": "VEDL.NS",       "name": "Vedanta"},
+        {"ticker": "SAIL.NS",       "name": "Steel Authority of India"},
+        {"ticker": "NMDC.NS",       "name": "NMDC"},
+        {"ticker": "COALINDIA.NS",  "name": "Coal India"},
+        {"ticker": "HINDCOPPER.NS", "name": "Hindustan Copper"},
+        {"ticker": "NATIONALUM.NS", "name": "National Aluminium"},
+        {"ticker": "RATNAMANI.NS",  "name": "Ratnamani Metals"},
+        {"ticker": "APL.NS",        "name": "APL Apollo Tubes"},
+        {"ticker": "JINDALSAW.NS",  "name": "Jindal Saw"},
+        {"ticker": "WELCORP.NS",    "name": "Welspun Corp"},
+        {"ticker": "JSWENERGY.NS",  "name": "JSW Energy"},
+        {"ticker": "MOIL.NS",       "name": "MOIL"},
+    ],
+    "realty": [
+        {"ticker": "DLF.NS",        "name": "DLF"},
+        {"ticker": "GODREJPROP.NS", "name": "Godrej Properties"},
+        {"ticker": "PRESTIGE.NS",   "name": "Prestige Estates"},
+        {"ticker": "OBEROIRLTY.NS", "name": "Oberoi Realty"},
+        {"ticker": "BRIGADE.NS",    "name": "Brigade Enterprises"},
+        {"ticker": "PHOENIXLTD.NS", "name": "Phoenix Mills"},
+        {"ticker": "SOBHA.NS",      "name": "Sobha"},
+        {"ticker": "MAHLIFE.NS",    "name": "Mahindra Lifespace"},
+        {"ticker": "SUNTECK.NS",    "name": "Sunteck Realty"},
+        {"ticker": "KOLTEPATIL.NS", "name": "Kolte Patil Developers"},
+        {"ticker": "LODHA.NS",      "name": "Macrotech Developers"},
+        {"ticker": "EMBASSY.NS",    "name": "Embassy Office Parks REIT"},
+        {"ticker": "MINDSPACE.NS",  "name": "Mindspace REIT"},
+        {"ticker": "NCC.NS",        "name": "NCC (Nagarjuna Construction)"},
+        {"ticker": "AJMERA.NS",     "name": "Ajmera Realty"},
+    ],
+    "energy": [
+        {"ticker": "RELIANCE.NS",   "name": "Reliance Industries"},
+        {"ticker": "ONGC.NS",       "name": "ONGC"},
+        {"ticker": "NTPC.NS",       "name": "NTPC"},
+        {"ticker": "POWERGRID.NS",  "name": "Power Grid Corporation"},
+        {"ticker": "BPCL.NS",       "name": "BPCL"},
+        {"ticker": "IOC.NS",        "name": "Indian Oil Corporation"},
+        {"ticker": "GAIL.NS",       "name": "GAIL India"},
+        {"ticker": "HINDPETRO.NS",  "name": "Hindustan Petroleum"},
+        {"ticker": "TATAPOWER.NS",  "name": "Tata Power"},
+        {"ticker": "ADANIGREEN.NS", "name": "Adani Green Energy"},
+        {"ticker": "ADANITRANS.NS", "name": "Adani Transmission"},
+        {"ticker": "TORNTPOWER.NS", "name": "Torrent Power"},
+        {"ticker": "CESC.NS",       "name": "CESC"},
+        {"ticker": "OIL.NS",        "name": "Oil India"},
+        {"ticker": "MGL.NS",        "name": "Mahanagar Gas"},
+    ],
+    "infra": [
+        {"ticker": "LT.NS",         "name": "Larsen & Toubro"},
+        {"ticker": "ADANIPORTS.NS", "name": "Adani Ports & SEZ"},
+        {"ticker": "IRCON.NS",      "name": "IRCON International"},
+        {"ticker": "KEC.NS",        "name": "KEC International"},
+        {"ticker": "IRB.NS",        "name": "IRB Infrastructure"},
+        {"ticker": "PNCINFRA.NS",   "name": "PNC Infratech"},
+        {"ticker": "KNRCON.NS",     "name": "KNR Constructions"},
+        {"ticker": "ASHOKA.NS",     "name": "Ashoka Buildcon"},
+        {"ticker": "GMRINFRA.NS",   "name": "GMR Airports Infrastructure"},
+        {"ticker": "NBCC.NS",       "name": "NBCC India"},
+        {"ticker": "HCC.NS",        "name": "Hindustan Construction"},
+        {"ticker": "ENGINERSIN.NS", "name": "Engineers India"},
+        {"ticker": "RVNL.NS",       "name": "Rail Vikas Nigam"},
+        {"ticker": "RITES.NS",      "name": "RITES"},
+        {"ticker": "MTNL.NS",       "name": "MTNL"},
+    ],
+    "media": [
+        {"ticker": "ZEEL.NS",       "name": "Zee Entertainment"},
+        {"ticker": "SUNTV.NS",      "name": "Sun TV Network"},
+        {"ticker": "NETWORK18.NS",  "name": "Network18 Media"},
+        {"ticker": "TV18BRDCST.NS", "name": "TV18 Broadcast"},
+        {"ticker": "PVRINOX.NS",    "name": "PVR Inox"},
+        {"ticker": "SAREGAMA.NS",   "name": "Saregama India"},
+        {"ticker": "TIPSINDLTD.NS", "name": "Tips Industries"},
+        {"ticker": "NAVINFLUOR.NS", "name": "Navin Fluorine"},
+        {"ticker": "HATHWAY.NS",    "name": "Hathway Cable"},
+        {"ticker": "DISHTV.NS",     "name": "Dish TV India"},
+    ],
+    "psubank": [
+        {"ticker": "SBIN.NS",       "name": "State Bank of India"},
+        {"ticker": "PNB.NS",        "name": "Punjab National Bank"},
+        {"ticker": "BANKBARODA.NS", "name": "Bank of Baroda"},
+        {"ticker": "CANARABANK.NS", "name": "Canara Bank"},
+        {"ticker": "UNIONBANK.NS",  "name": "Union Bank of India"},
+        {"ticker": "INDIANB.NS",    "name": "Indian Bank"},
+        {"ticker": "CENTRALBK.NS",  "name": "Central Bank of India"},
+        {"ticker": "IOB.NS",        "name": "Indian Overseas Bank"},
+        {"ticker": "BANKINDIA.NS",  "name": "Bank of India"},
+        {"ticker": "MAHABANK.NS",   "name": "Bank of Maharashtra"},
+        {"ticker": "PSB.NS",        "name": "Punjab & Sind Bank"},
+        {"ticker": "J&KBANK.NS",    "name": "J&K Bank"},
+        {"ticker": "UCOBK.NS",      "name": "UCO Bank"},
+    ],
+    "midcap": [
+        {"ticker": "PERSISTENT.NS", "name": "Persistent Systems"},
+        {"ticker": "TIINDIA.NS",    "name": "Tube Investments"},
+        {"ticker": "SUNDARMFIN.NS", "name": "Sundaram Finance"},
+        {"ticker": "SCHAEFFLER.NS", "name": "Schaeffler India"},
+        {"ticker": "AIAENG.NS",     "name": "AIA Engineering"},
+        {"ticker": "ASTRAL.NS",     "name": "Astral Poly Technik"},
+        {"ticker": "PIIND.NS",      "name": "PI Industries"},
+        {"ticker": "DEEPAKNTR.NS",  "name": "Deepak Nitrite"},
+        {"ticker": "LALPATHLAB.NS", "name": "Dr. Lal PathLabs"},
+        {"ticker": "METROPOLIS.NS", "name": "Metropolis Healthcare"},
+        {"ticker": "CAMS.NS",       "name": "CAMS"},
+        {"ticker": "HAPPSTMNDS.NS", "name": "Happiest Minds Technologies"},
+        {"ticker": "BIKAJI.NS",     "name": "Bikaji Foods International"},
+        {"ticker": "CAMPUS.NS",     "name": "Campus Activewear"},
+        {"ticker": "DELHIVERY.NS",  "name": "Delhivery"},
+    ],
+}
+
+_sector_stocks_cache: Dict[str, Any] = {}
+_SECTOR_STOCKS_TTL = 300  # 5 minutes
+_sector_stock_executor = None  # lazy init
+
+from concurrent.futures import ThreadPoolExecutor as _TPE
+
+
+def _fetch_one_stock(stock_meta: Dict) -> Optional[Dict]:
+    """Sync: fetch 2-day history for one stock and compute change%."""
+    try:
+        obj = yf.Ticker(stock_meta["ticker"])
+        hist = obj.history(period="2d")
+        if hist.empty or len(hist) < 1:
+            return None
+        curr = round(float(hist["Close"].iloc[-1]), 2)
+        prev = round(float(hist["Close"].iloc[-2]), 2) if len(hist) >= 2 else curr
+        chg = round((curr - prev) / prev * 100, 2) if prev > 0 else 0.0
+        vol = int(hist["Volume"].iloc[-1]) if "Volume" in hist.columns else 0
+        return {
+            "ticker": stock_meta["ticker"],
+            "name": stock_meta["name"],
+            "price": curr,
+            "prev_close": prev,
+            "change_pct": chg,
+            "volume": vol,
+        }
+    except Exception:
+        return {"ticker": stock_meta["ticker"], "name": stock_meta["name"],
+                "price": None, "prev_close": None, "change_pct": 0.0, "volume": 0}
+
+
+@api_router.get("/sectors/{sector_key}/stocks")
+async def get_sector_stocks(sector_key: str):
+    """Return all NSE stocks in a sector with live prices. Cached 5 min."""
+    global _sector_stocks_cache, _sector_stock_executor
+    cache_key = sector_key.lower()
+    now = datetime.now(timezone.utc).timestamp()
+
+    cached = _sector_stocks_cache.get(cache_key)
+    if cached and cached.get("ts", 0) + _SECTOR_STOCKS_TTL > now:
+        return {"sector": cache_key, "stocks": cached["data"], "cached": True}
+
+    stocks_meta = _SECTOR_STOCKS.get(cache_key)
+    if not stocks_meta:
+        raise HTTPException(status_code=404, detail=f"Sector '{sector_key}' not found")
+
+    # Parallel fetch using thread pool
+    if _sector_stock_executor is None:
+        _sector_stock_executor = _TPE(max_workers=12)
+
+    loop = asyncio.get_event_loop()
+    tasks = [
+        loop.run_in_executor(_sector_stock_executor, _fetch_one_stock, meta)
+        for meta in stocks_meta
+    ]
+    results = await asyncio.gather(*tasks)
+
+    stocks = [r for r in results if r is not None]
+    stocks.sort(key=lambda x: abs(x.get("change_pct") or 0), reverse=True)
+
+    _sector_stocks_cache[cache_key] = {"ts": now, "data": stocks}
+    return {"sector": cache_key, "stocks": stocks, "cached": False}
+
 _sector_cache: Dict[str, Any] = {}
 _SECTOR_CACHE_TTL = 300  # 5 minutes
 
