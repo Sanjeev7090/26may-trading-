@@ -5748,6 +5748,65 @@ async def portfolio_summary():
     }
 
 
+# ======================= SECTOR TRENDING =======================
+
+_SECTOR_MAP = [
+    {"name": "NIFTY BANK",    "ticker": "^NSEBANK",    "icon": "bank"},
+    {"name": "NIFTY IT",      "ticker": "^CNXIT",      "icon": "it"},
+    {"name": "NIFTY AUTO",    "ticker": "^CNXAUTO",    "icon": "auto"},
+    {"name": "NIFTY PHARMA",  "ticker": "^CNXPHARMA",  "icon": "pharma"},
+    {"name": "NIFTY FMCG",   "ticker": "^CNXFMCG",    "icon": "fmcg"},
+    {"name": "NIFTY METAL",   "ticker": "^CNXMETAL",   "icon": "metal"},
+    {"name": "NIFTY REALTY",  "ticker": "^CNXREALTY",  "icon": "realty"},
+    {"name": "NIFTY ENERGY",  "ticker": "^CNXENERGY",  "icon": "energy"},
+    {"name": "NIFTY INFRA",   "ticker": "^CNXINFRA",   "icon": "infra"},
+    {"name": "NIFTY MEDIA",   "ticker": "^CNXMEDIA",   "icon": "media"},
+    {"name": "NIFTY PSU BANK","ticker": "^CNXPSUBANK", "icon": "psubank"},
+    {"name": "NIFTY MIDCAP",  "ticker": "^NSEMDCP50",  "icon": "midcap"},
+]
+
+_sector_cache: Dict[str, Any] = {}
+_SECTOR_CACHE_TTL = 300  # 5 minutes
+
+
+@api_router.get("/sectors/trending")
+async def get_sectors_trending():
+    """Return NSE sectors sorted by absolute % change today. Cached 5 min."""
+    global _sector_cache
+    now = datetime.now(timezone.utc).timestamp()
+    if _sector_cache.get("ts", 0) + _SECTOR_CACHE_TTL > now and _sector_cache.get("data"):
+        return {"sectors": _sector_cache["data"], "cached": True}
+
+    results = []
+    for sector in _SECTOR_MAP:
+        try:
+            obj = yf.Ticker(sector["ticker"])
+            hist = obj.history(period="2d")
+            if hist.empty or len(hist) < 2:
+                hist = obj.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                continue
+            prev_close = float(hist["Close"].iloc[-2])
+            curr_close = float(hist["Close"].iloc[-1])
+            if prev_close <= 0:
+                continue
+            change_pct = round((curr_close - prev_close) / prev_close * 100, 2)
+            results.append({
+                "name": sector["name"],
+                "ticker": sector["ticker"],
+                "icon": sector["icon"],
+                "change_pct": change_pct,
+                "current": round(curr_close, 2),
+            })
+        except Exception:
+            continue
+
+    # Sort by absolute change descending (top movers first)
+    results.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
+    _sector_cache = {"ts": now, "data": results}
+    return {"sectors": results, "cached": False}
+
+
 # ======================= PAPER TRADING =======================
 
 async def _ensure_paper_portfolio():
