@@ -73,6 +73,17 @@ Clone "tuntun-scanner" GitHub repo, redesign with fresh UI, and add advanced fea
 
 ## P2 Backlog
 - GannQSC Panel improvements
+- Live Paper Trading mode ✅ DONE (Feb 2026)
+
+### Paper Trading Feature (Feb 2026)
+- **Virtual Portfolio**: ₹5,00,000 starting balance (MongoDB-backed, persistent)
+- **Manual Trading**: Place BUY/SELL orders via `+ New Order` form with Symbol, Direction, Qty, Entry, SL, Target
+- **Auto Trading**: Auto Execute toggle — scanner NEW signals auto-paper-trade
+- **Portfolio Tracking**: Available Balance, Total P&L (realized+unrealized), Win Rate, Open/Closed counts
+- **Full History**: Open Positions with live unrealized P&L, Closed Trade History with SL_HIT/TARGET_HIT/CLOSED status
+- **Scanner Integration**: "Trade" button on every scanner signal → pre-fills PAPER tab order form
+- **Risk/Reward Preview**: Auto R:R calculator when entry+SL+target filled
+- **Endpoints**: GET/POST /api/paper-trade/portfolio, POST /api/paper-trade/order, GET /api/paper-trade/positions, GET /api/paper-trade/history, PUT /api/paper-trade/close/{id}, POST /api/paper-trade/reset
 
 ### Indices Live Ticker + Options Flow
 - **Indices Ticker Bar**: Nifty 50, SENSEX, Bank Nifty — live prices via yfinance (auto-refresh every 60s)

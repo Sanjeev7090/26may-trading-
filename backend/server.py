@@ -5751,22 +5751,23 @@ async def portfolio_summary():
 # ======================= PAPER TRADING =======================
 
 async def _ensure_paper_portfolio():
-    """Ensure paper portfolio doc exists in MongoDB, create if not."""
+    """Ensure paper portfolio doc exists in MongoDB. Uses upsert to prevent race-condition duplicates."""
+    default_doc = {
+        "portfolio_id": "default",
+        "initial_balance": 500000.0,
+        "current_balance": 500000.0,
+        "realized_pnl": 0.0,
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.paper_portfolio.update_one(
+        {"portfolio_id": "default"},
+        {"$setOnInsert": default_doc},
+        upsert=True
+    )
     portfolio = await db.paper_portfolio.find_one({"portfolio_id": "default"}, {"_id": 0})
-    if not portfolio:
-        doc = {
-            "portfolio_id": "default",
-            "initial_balance": 500000.0,
-            "current_balance": 500000.0,
-            "realized_pnl": 0.0,
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.paper_portfolio.insert_one(doc)
-        doc.pop("_id", None)
-        return doc
     return portfolio
 
 

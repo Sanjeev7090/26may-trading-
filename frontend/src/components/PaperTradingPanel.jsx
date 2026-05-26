@@ -247,6 +247,7 @@ const PaperTradingPanel = ({ selectedStock, pendingTrade, onPendingTradeConsumed
       setTab('order');
       if (onPendingTradeConsumed) onPendingTradeConsumed();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingTrade]);
 
   const handlePlaceOrder = async () => {
