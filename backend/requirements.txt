@@ -136,3 +136,4 @@ colorama
 nkeys
 pynacl
 nats-py
+langgraph>=1.2.0
