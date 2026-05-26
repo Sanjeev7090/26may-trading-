@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { Lightning, Bell, X, TrendUp, TrendDown, Play, Pause, SpeakerHigh, CurrencyInr, Binoculars } from '@phosphor-icons/react';
+import StockFinderModal from './StockFinderModal';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -178,7 +179,7 @@ const ConfluenceMeter = ({ score, label, direction, aligned, total }) => {
 };
 
 // ---- Main AutoScanner Component ----
-const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTrade }) => {
+const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTrade, onStockSelect }) => {
   const [isActive, setIsActive] = useState(false);
   const [signals, setSignals] = useState([]);
   const [popupSignals, setPopupSignals] = useState([]);
@@ -186,6 +187,7 @@ const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTr
   const [scanning, setScanning] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [confluenceData, setConfluenceData] = useState(null);
+  const [showFinder, setShowFinder] = useState(false);
   const intervalRef = useRef(null);
   const seenSignalsRef = useRef(new Set());
   const autoExecuteRef = useRef(autoExecute);
@@ -302,6 +304,15 @@ const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTr
             <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400">Auto Scanner</span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowFinder(true)}
+              className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded flex items-center gap-1 bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25 border border-yellow-500/25 transition-all"
+              data-testid="open-stock-finder"
+              title="Sabhi stocks scan karo"
+            >
+              <Binoculars size={11} weight="bold" />
+              Finder
+            </button>
             <button onClick={() => setSoundEnabled(!soundEnabled)}
               className={`p-1 rounded ${soundEnabled ? 'text-[#00E676]' : 'text-zinc-600'}`}
               data-testid="sound-toggle"
@@ -446,6 +457,17 @@ const AutoScanner = ({ selectedStock, onPaperTrade, autoExecute, onAutoExecuteTr
           </div>
         )}
       </div>
+
+      {/* Stock Finder Modal */}
+      {showFinder && (
+        <StockFinderModal
+          onClose={() => setShowFinder(false)}
+          onStockSelect={(stock) => {
+            if (onStockSelect) onStockSelect(stock);
+            setShowFinder(false);
+          }}
+        />
+      )}
     </>
   );
 };

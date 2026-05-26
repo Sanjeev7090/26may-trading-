@@ -125,8 +125,8 @@ const StockFinderModal = ({ onClose, onStockSelect }) => {
   const [filter,    setFilter]    = useState('ALL');    // ALL | BUY | SELL
   const [capFilter, setCapFilter] = useState('all');    // all | large | mid | small
   const [search,    setSearch]    = useState('');
-  const [sortKey,   setSortKey]   = useState('confidence');
-  const [sortDir,   setSortDir]   = useState(-1);
+  const [sortKey,   setSortKey]   = useState('name');
+  const [sortDir,   setSortDir]   = useState(1);
   const sourceRef = useRef(null);
 
   const startScan = () => {
@@ -167,7 +167,7 @@ const StockFinderModal = ({ onClose, onStockSelect }) => {
 
   const handleSort = (key) => {
     if (sortKey === key) setSortDir(d => d * -1);
-    else { setSortKey(key); setSortDir(-1); }
+    else { setSortKey(key); setSortDir(key === 'name' ? 1 : -1); }
   };
 
   const filtered = results

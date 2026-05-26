@@ -651,6 +651,7 @@ const TradingDashboard = () => {
                 onPaperTrade={handlePaperTradeFromSignal}
                 autoExecute={paperAutoExecute}
                 onAutoExecuteTrade={handleAutoExecuteTrade}
+                onStockSelect={handleStockSelect}
               />
             )}
 
