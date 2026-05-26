@@ -300,3 +300,116 @@ input, select, textarea {
   0%,100% { opacity: 0.3; }
   50%     { opacity: 0.8; }
 }
+
+
+/* ================================================================
+   LIGHT THEME — CSS Variable + Tailwind Class Overrides
+   Covers ALL sub-components without touching each file individually
+   ================================================================ */
+
+/* Override CSS variables when NOT in dark mode */
+html:not(.dark) {
+  --bg-app: #F0F4F8;
+  --bg-panel: #FFFFFF;
+  --bg-panel-hover: #F8FAFC;
+  --bg-input: #EFF2F7;
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --border-default: rgba(15,23,42,0.08);
+  --border-focus: #0F172A;
+  color-scheme: light;
+}
+
+html:not(.dark) body {
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+/* Scrollbars */
+html:not(.dark) ::-webkit-scrollbar-track { background: #EEF2F7; }
+html:not(.dark) ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); }
+html:not(.dark) ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.28); }
+
+/* ---- BACKGROUND OVERRIDES ---- */
+html:not(.dark) .bg-\[\#0A0A0A\] { background-color: #F0F4F8 !important; }
+html:not(.dark) .bg-\[\#0a0a0a\] { background-color: #F0F4F8 !important; }
+html:not(.dark) .bg-\[\#141414\] { background-color: #FFFFFF !important; }
+html:not(.dark) .bg-\[\#0B0B0B\] { background-color: #E8EDF3 !important; }
+html:not(.dark) .bg-\[\#0b0b0b\] { background-color: #E8EDF3 !important; }
+html:not(.dark) .bg-\[\#0D0D0D\] { background-color: #FFFFFF !important; }
+html:not(.dark) .bg-\[\#0d0d0d\] { background-color: #FFFFFF !important; }
+html:not(.dark) .bg-\[\#111111\] { background-color: #FFFFFF !important; }
+html:not(.dark) .bg-\[\#111\]    { background-color: #FFFFFF !important; }
+html:not(.dark) .bg-\[\#1C1C1C\] { background-color: #F4F7FA !important; }
+html:not(.dark) .bg-\[\#1c1c1c\] { background-color: #F4F7FA !important; }
+html:not(.dark) .bg-\[\#1A1A1A\] { background-color: #F4F7FA !important; }
+html:not(.dark) .bg-\[\#121212\] { background-color: #FFFFFF !important; }
+
+/* Semi-transparent backgrounds */
+html:not(.dark) .bg-white\/5      { background-color: rgba(0,0,0,0.04) !important; }
+html:not(.dark) .bg-white\/10     { background-color: rgba(0,0,0,0.06) !important; }
+html:not(.dark) .bg-white\/\[0\.02\] { background-color: rgba(0,0,0,0.02) !important; }
+html:not(.dark) .bg-white\/\[0\.03\] { background-color: rgba(0,0,0,0.03) !important; }
+html:not(.dark) .bg-white\/\[0\.04\] { background-color: rgba(0,0,0,0.04) !important; }
+html:not(.dark) .bg-white\/\[0\.08\] { background-color: rgba(0,0,0,0.05) !important; }
+html:not(.dark) .bg-black\/50     { background-color: rgba(255,255,255,0.7) !important; }
+
+/* Hover & active */
+html:not(.dark) .hover\:bg-white\/5:hover      { background-color: rgba(0,0,0,0.04) !important; }
+html:not(.dark) .hover\:bg-white\/\[0\.08\]:hover { background-color: rgba(0,0,0,0.06) !important; }
+html:not(.dark) .hover\:bg-white\/10:hover     { background-color: rgba(0,0,0,0.06) !important; }
+html:not(.dark) .active\:bg-white\/5:active    { background-color: rgba(0,0,0,0.04) !important; }
+
+/* Loading overlays */
+html:not(.dark) .bg-\[\#0A0A0A\]\/80 { background-color: rgba(240,244,248,0.85) !important; }
+html:not(.dark) .bg-\[\#0A0A0A\]\/90 { background-color: rgba(248,250,252,0.92) !important; }
+
+/* ---- TEXT OVERRIDES ---- */
+html:not(.dark) .text-white        { color: #0F172A !important; }
+html:not(.dark) .text-white\/90    { color: rgba(15,23,42,0.9) !important; }
+html:not(.dark) .text-zinc-500     { color: #64748B !important; }
+html:not(.dark) .text-zinc-400     { color: #94A3B8 !important; }
+html:not(.dark) .text-zinc-600     { color: #94A3B8 !important; }
+html:not(.dark) .text-zinc-700     { color: #CBD5E1 !important; }
+html:not(.dark) .text-zinc-800     { color: #E2E8F0 !important; }
+html:not(.dark) .placeholder\:text-zinc-600::placeholder { color: #94A3B8 !important; }
+
+/* Keep green/red signal colors unchanged */
+html:not(.dark) .text-\[\#00E676\] { color: #059669 !important; }
+html:not(.dark) .text-\[\#FF3B30\] { color: #DC2626 !important; }
+html:not(.dark) .text-\[\#FF3D71\] { color: #DC2626 !important; }
+
+/* ---- BORDER OVERRIDES ---- */
+html:not(.dark) .border-white\/10 { border-color: rgba(0,0,0,0.08) !important; }
+html:not(.dark) .border-white\/5  { border-color: rgba(0,0,0,0.04) !important; }
+html:not(.dark) .border-white\/20 { border-color: rgba(0,0,0,0.12) !important; }
+html:not(.dark) .border-white\/40 { border-color: rgba(0,0,0,0.25) !important; }
+html:not(.dark) .border-white\/\[0\.04\] { border-color: rgba(0,0,0,0.04) !important; }
+
+/* Strategy list dividers */
+html:not(.dark) .divide-white\/10 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(0,0,0,0.08) !important;
+}
+
+/* Input fields */
+html:not(.dark) .bg-black {
+  background-color: #F8FAFC !important;
+}
+html:not(.dark) .bg-black\/60,
+html:not(.dark) .bg-black\/80,
+html:not(.dark) .bg-black\/90 {
+  background-color: rgba(248,250,252,0.95) !important;
+}
+
+/* ---- INPUT FOCUS ---- */
+html:not(.dark) .focus\:border-white\/40:focus { border-color: rgba(0,0,0,0.3) !important; }
+
+/* ---- HOVER TEXT ---- */
+html:not(.dark) .hover\:text-white:hover { color: #0F172A !important; }
+
+/* ---- TRANSITION for theme switch ---- */
+html.dark,
+html:not(.dark) {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}

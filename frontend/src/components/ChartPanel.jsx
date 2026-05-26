@@ -4,6 +4,7 @@ import { ChartLine, TrendUp, TrendDown, PencilLine, Trash, Lightning } from '@ph
 import GrowwTradeModal from './GrowwTradeModal';
 import StrategyOverlay from './StrategyOverlay';
 import TimeframeLevels from './TimeframeLevels';
+import { useTheme } from '../context/ThemeContext';
 
 const ChartPanel = ({
   stockData, loading, selectedStock, onPivotSelect, pivotPoint, gannFan,
@@ -20,6 +21,7 @@ const ChartPanel = ({
   const [isMovingMode, setIsMovingMode] = useState(false);
   const [tfOpen, setTfOpen] = useState(false);
   const [showTrade, setShowTrade] = useState(false);
+  const { theme } = useTheme();
 
   const timeframes = [
     { multiplier: 1, timespan: 'minute', label: '1MIN' },
@@ -102,13 +104,20 @@ const ChartPanel = ({
         retryTimer = setTimeout(initChart, 40);   // retry until layout settles
         return;
       }
+      const isDark = document.documentElement.classList.contains('dark');
       const chart = createChart(chartContainerRef.current, {
         width: chartContainerRef.current.clientWidth,
         height: h,
-        layout: { background: { color: '#0A0A0A' }, textColor: '#52525B' },
-        grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
-        rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)', mode: semiLogScale ? 2 : 0 },
-        timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, rightOffset: 10, barSpacing: 6, minBarSpacing: 0.5 },
+        layout: {
+          background: { color: isDark ? '#0A0A0A' : '#FFFFFF' },
+          textColor: isDark ? '#52525B' : '#64748B',
+        },
+        grid: {
+          vertLines: { color: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)' },
+          horzLines: { color: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)' },
+        },
+        rightPriceScale: { borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)', mode: semiLogScale ? 2 : 0 },
+        timeScale: { borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)', timeVisible: true, rightOffset: 10, barSpacing: 6, minBarSpacing: 0.5 },
         crosshair: { mode: 1 },
         localization: { locale: 'en-US' },
         handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
@@ -155,6 +164,24 @@ const ChartPanel = ({
     if (chartRef.current) chartRef.current.applyOptions({ rightPriceScale: { mode: semiLogScale ? 2 : 0 } });
   }, [semiLogScale]);
 
+  // Update chart colors when theme changes
+  useEffect(() => {
+    if (!chartRef.current) return;
+    const isDark = theme === 'dark';
+    chartRef.current.applyOptions({
+      layout: {
+        background: { color: isDark ? '#0A0A0A' : '#FFFFFF' },
+        textColor: isDark ? '#52525B' : '#64748B',
+      },
+      grid: {
+        vertLines: { color: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)' },
+        horzLines: { color: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)' },
+      },
+      rightPriceScale: { borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)' },
+      timeScale: { borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)' },
+    });
+  }, [theme]);
+
   useEffect(() => {
     if (!stockData || !candlestickSeriesRef.current) return;
     const chartData = stockData.bars.map(bar => ({ time: bar.timestamp / 1000, open: bar.open, high: bar.high, low: bar.low, close: bar.close }));
@@ -197,12 +224,12 @@ const ChartPanel = ({
   return (
     <div className="flex flex-col h-full" data-testid="chart-panel">
       {/* Chart Toolbar — scrollable row on mobile */}
-      <div className="flex items-center justify-between px-2 py-1 border-b border-white/10 bg-[#0A0A0A] shrink-0 gap-1 overflow-x-auto scrollbar-none">
+      <div className="flex items-center justify-between px-2 py-1 border-b border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0A0A] shrink-0 gap-1 overflow-x-auto scrollbar-none transition-colors duration-200">
         <div className="flex items-center gap-1 flex-nowrap shrink-0">
           {/* Compact TF trigger — mobile only */}
           <button
             onClick={() => setTfOpen(!tfOpen)}
-            className="md:hidden px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider bg-white text-black flex items-center gap-1 shrink-0"
+            className="md:hidden px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider bg-slate-900 dark:bg-white text-white dark:text-black flex items-center gap-1 shrink-0"
             data-testid="tf-trigger"
           >
             {timeframe.label}
@@ -216,8 +243,8 @@ const ChartPanel = ({
               onClick={() => { onTimeframeChange(tf); setTfOpen(false); }}
               className={`px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap min-w-[28px] ${
                 timeframe.label === tf.label
-                  ? 'bg-white text-black'
-                  : 'text-zinc-500 hover:text-white active:text-white'
+                  ? 'bg-slate-900 dark:bg-white text-white dark:text-black'
+                  : 'text-slate-400 dark:text-zinc-500 hover:text-slate-800 dark:hover:text-white active:text-slate-900 dark:active:text-white'
               }`}
               data-testid={`tf-${tf.label}`}
             >
@@ -225,7 +252,7 @@ const ChartPanel = ({
             </button>
           ))}
           </div>
-          <div className="w-px h-4 bg-white/10 mx-1 shrink-0" />
+          <div className="w-px h-4 bg-slate-200 dark:bg-white/10 mx-1 shrink-0" />
           {/* Gann toggle */}
           <button
             onClick={() => setShowGannLines(!showGannLines)}
@@ -250,12 +277,12 @@ const ChartPanel = ({
           {/* Data source toggle — Yahoo / Groww (Indian stocks only) */}
           {!isCrypto && onDataSourceChange && (
             <>
-              <div className="w-px h-4 bg-white/10 mx-1 shrink-0" />
-              <div className="flex items-center gap-0 shrink-0 border border-white/10">
+              <div className="w-px h-4 bg-slate-200 dark:bg-white/10 mx-1 shrink-0" />
+              <div className="flex items-center gap-0 shrink-0 border border-slate-200 dark:border-white/10">
                 <button
                   onClick={() => onDataSourceChange('yahoo')}
                   className={`px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-all ${
-                    dataSource === 'yahoo' ? 'bg-white text-black' : 'text-zinc-500 hover:text-white'
+                    dataSource === 'yahoo' ? 'bg-slate-900 dark:bg-white text-white dark:text-black' : 'text-slate-400 dark:text-zinc-500 hover:text-slate-800 dark:hover:text-white'
                   }`}
                   data-testid="src-yahoo"
                   title="Yahoo Finance"
@@ -263,7 +290,7 @@ const ChartPanel = ({
                 <button
                   onClick={() => onDataSourceChange('groww')}
                   className={`px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-all ${
-                    dataSource === 'groww' ? 'bg-[#00E676] text-black' : 'text-zinc-500 hover:text-white'
+                    dataSource === 'groww' ? 'bg-[#00E676] text-black' : 'text-slate-400 dark:text-zinc-500 hover:text-slate-800 dark:hover:text-white'
                   }`}
                   data-testid="src-groww"
                   title="Groww live data"
@@ -274,7 +301,7 @@ const ChartPanel = ({
           {/* Trade button (Indian stocks) — opens Groww order modal */}
           {!isCrypto && selectedStock && (
             <>
-              <div className="w-px h-4 bg-white/10 mx-1 shrink-0" />
+          <div className="w-px h-4 bg-slate-200 dark:bg-white/10 mx-1 shrink-0" />
               <button
                 onClick={() => setShowTrade(true)}
                 className="px-2 py-1 text-[10px] font-black uppercase tracking-wider bg-[#00E676] text-black hover:opacity-90 active:opacity-80 flex items-center gap-1 whitespace-nowrap shrink-0"
@@ -293,7 +320,7 @@ const ChartPanel = ({
               <button
                 onClick={() => setSelectMode('high')}
                 className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-0.5 whitespace-nowrap ${
-                  selectMode === 'high' ? 'bg-[#FF3B30] text-white' : 'text-zinc-500 hover:text-white'
+                  selectMode === 'high' ? 'bg-[#FF3B30] text-white' : 'text-slate-400 dark:text-zinc-500 hover:text-slate-800 dark:hover:text-white'
                 }`}
                 data-testid="select-high-btn"
               >
@@ -303,7 +330,7 @@ const ChartPanel = ({
               <button
                 onClick={() => setSelectMode('low')}
                 className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-0.5 whitespace-nowrap ${
-                  selectMode === 'low' ? 'bg-[#00E676] text-black' : 'text-zinc-500 hover:text-white'
+                  selectMode === 'low' ? 'bg-[#00E676] text-black' : 'text-slate-400 dark:text-zinc-500 hover:text-slate-800 dark:hover:text-white'
                 }`}
                 data-testid="select-low-btn"
               >
@@ -314,19 +341,19 @@ const ChartPanel = ({
           )}
           {pivotPoint && (
             <>
-              <span className="text-[9px] font-mono text-zinc-400 whitespace-nowrap">
+              <span className="text-[9px] font-mono text-slate-500 dark:text-zinc-400 whitespace-nowrap">
                 P: {pivotPoint.price.toFixed(0)}
               </span>
               <button
                 onClick={() => setIsMovingMode(!isMovingMode)}
                 className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                  isMovingMode ? 'bg-[#F5A623] text-black' : 'text-zinc-500 hover:text-white'
+                  isMovingMode ? 'bg-[#F5A623] text-black' : 'text-slate-400 dark:text-zinc-500 hover:text-slate-800 dark:hover:text-white'
                 }`}
                 data-testid="move-pivot-btn"
               >
                 {isMovingMode ? 'MOVE' : 'MOVE'}
               </button>
-              <button onClick={handleDeleteGann} className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 hover:text-[#FF3B30]" data-testid="clear-gann-btn">
+              <button onClick={handleDeleteGann} className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500 hover:text-[#FF3B30]" data-testid="clear-gann-btn">
                 <Trash size={12} weight="bold" />
               </button>
             </>
@@ -336,8 +363,8 @@ const ChartPanel = ({
 
       {/* Extension slider */}
       {pivotPoint && showGannLines && (
-        <div className="flex items-center gap-3 px-3 py-1 border-b border-white/10 bg-[#0A0A0A] shrink-0">
-          <span className="text-[10px] text-zinc-500 font-mono whitespace-nowrap">Ext: {lineExtension}</span>
+        <div className="flex items-center gap-3 px-3 py-1 border-b border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0A0A] shrink-0">
+          <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono whitespace-nowrap">Ext: {lineExtension}</span>
           <input
             type="range"
             min={10} max={100} step={5}
@@ -359,15 +386,15 @@ const ChartPanel = ({
       {/* Chart area */}
       <div className="flex-1 relative" ref={chartContainerRef}>
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#0A0A0A]/80 z-10">
-            <p className="text-xs font-mono text-zinc-400 animate-pulse">Loading chart data...</p>
+          <div className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-[#0A0A0A]/80 z-10">
+            <p className="text-xs font-mono text-slate-400 dark:text-zinc-400 animate-pulse">Loading chart data...</p>
           </div>
         )}
         {!loading && !stockData && (
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <ChartLine size={48} className="text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-500">Select a stock or crypto to view chart</p>
-            <p className="text-[10px] text-zinc-600 mt-1 font-mono">Scroll to zoom / Drag to pan</p>
+            <ChartLine size={48} className="text-slate-300 dark:text-zinc-700 mb-3" />
+            <p className="text-sm text-slate-400 dark:text-zinc-500">Select a stock or crypto to view chart</p>
+            <p className="text-[10px] text-slate-300 dark:text-zinc-600 mt-1 font-mono">Scroll to zoom / Drag to pan</p>
           </div>
         )}
         
@@ -389,12 +416,12 @@ const ChartPanel = ({
 
       {/* Status bar */}
       {selectMode && (
-        <div className="px-3 py-1 border-t border-white/10 bg-[#141414] text-[10px] font-mono text-[#F5A623] shrink-0">
+        <div className="px-3 py-1 border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#141414] text-[10px] font-mono text-[#F5A623] shrink-0">
           Click on chart to select {selectMode === 'high' ? 'swing high' : 'swing low'} point
         </div>
       )}
       {isMovingMode && pivotPoint && (
-        <div className="px-3 py-1 border-t border-white/10 bg-[#141414] text-[10px] font-mono text-[#F5A623] shrink-0">
+        <div className="px-3 py-1 border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#141414] text-[10px] font-mono text-[#F5A623] shrink-0">
           Click anywhere on chart to move pivot
         </div>
       )}

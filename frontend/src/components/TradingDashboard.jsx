@@ -40,7 +40,8 @@ import SectorTrending from './SectorTrending';
 import SectorStocksSheet from './SectorStocksSheet';
 import TopMoversWidget from './TopMoversWidget';
 import { Toaster, toast } from 'sonner';
-import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight } from '@phosphor-icons/react';
+import { Star, Wallet, Bell, ChartLineUp, List, CurrencyBtc, Lightning, Newspaper, ArrowsLeftRight, Sun, Moon } from '@phosphor-icons/react';
+import { useTheme } from '../context/ThemeContext';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -78,6 +79,7 @@ const TradingDashboard = () => {
   const [pendingPaperTrade, setPendingPaperTrade] = useState(null); // Paper trade from scanner/strategy
   const [paperAutoExecute, setPaperAutoExecute] = useState(false); // Auto-execute paper trades
   const [sectorSheet, setSectorSheet] = useState(null); // sector obj for stocks sheet
+  const { theme, toggleTheme } = useTheme();
   const wsRef = useRef(null);
 
   // Handler for strategy analysis completion - updates chart overlays
@@ -447,8 +449,8 @@ const TradingDashboard = () => {
   ];
 
   return (
-    <div className="h-screen overflow-hidden bg-[#0A0A0A] text-white flex flex-col" data-testid="trading-dashboard">
-      <Toaster theme="dark" position="top-right" richColors />
+    <div className="h-screen overflow-hidden bg-slate-100 dark:bg-[#0A0A0A] text-slate-900 dark:text-white flex flex-col transition-colors duration-200" data-testid="trading-dashboard">
+      <Toaster theme={theme} position="top-right" richColors />
 
       {/* HYBRID MODE OVERLAY */}
       {hybridMode && (
@@ -459,13 +461,13 @@ const TradingDashboard = () => {
       {!hybridMode && (<>
 
       {/* Header */}
-      <header className="h-12 md:h-14 border-b border-white/10 flex items-center justify-between px-3 lg:px-6 bg-[#0A0A0A]/90 backdrop-blur-md z-50 shrink-0" data-testid="dashboard-header">
+      <header className="h-12 md:h-14 border-b border-slate-200 dark:border-white/10 flex items-center justify-between px-3 lg:px-6 bg-white/90 dark:bg-[#0A0A0A]/90 backdrop-blur-md z-50 shrink-0 transition-colors duration-200" data-testid="dashboard-header">
         <div className="flex items-center gap-3">
           <h1 className="text-sm md:text-lg font-black tracking-tighter uppercase" style={{ fontFamily: "'Chivo', sans-serif" }}>
-            <span className="text-white">GANN</span>
+            <span className="text-slate-900 dark:text-white">GANN</span>
             <span className="text-[#00E676] ml-1">TRADER</span>
           </h1>
-          <span className="hidden sm:inline text-[10px] text-zinc-500 font-mono tracking-wider border border-white/10 px-2 py-0.5">
+          <span className="hidden sm:inline text-[10px] text-slate-400 dark:text-zinc-500 font-mono tracking-wider border border-slate-200 dark:border-white/10 px-2 py-0.5">
             {isCrypto ? 'CRYPTO' : 'NSE'}
           </span>
         </div>
@@ -491,7 +493,7 @@ const TradingDashboard = () => {
               {!isCrypto && !isOption && (
                 <button
                   onClick={() => setShowNews(true)}
-                  className="ml-1 p-1 rounded hover:bg-white/10 transition-colors"
+                  className="ml-1 p-1 rounded hover:bg-slate-100 dark:hover:bg-white/10 transition-colors"
                   title="View News"
                   data-testid="news-btn"
                 >
@@ -500,6 +502,18 @@ const TradingDashboard = () => {
               )}
             </div>
           )}
+          {/* THEME TOGGLE BUTTON */}
+          <button
+            onClick={toggleTheme}
+            className="p-1.5 rounded-md border border-slate-200 dark:border-white/10 text-slate-500 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-white/10 hover:text-slate-800 dark:hover:text-white transition-all duration-200"
+            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            data-testid="theme-toggle"
+          >
+            {theme === 'dark'
+              ? <Sun size={14} weight="bold" />
+              : <Moon size={14} weight="bold" />
+            }
+          </button>
           {/* HYBRID MODE BUTTON */}
           <button
             onClick={() => setHybridMode(true)}
@@ -516,18 +530,21 @@ const TradingDashboard = () => {
       {/* Indices Live Ticker — NIFTY 50 / SENSEX / BANK NIFTY (tap → top options) */}
       <IndicesTickerBar onIndexClick={handleIndexClick} />
 
-      {/* Mobile Tab Bar — full-width 3-panel nav */}
-      <div className="flex lg:hidden border-b border-white/10 shrink-0 bg-[#0D0D0D]">
+      {/* Mobile Tab Bar — full-width 3-panel nav (improved) */}
+      <div className="flex lg:hidden border-b border-slate-200 dark:border-white/10 shrink-0 bg-white dark:bg-[#0D0D0D] transition-colors duration-200">
         {mobilePanels.map(p => (
           <button key={p.id} onClick={() => setMobilePanel(p.id)}
-            className={`flex-1 py-3 flex flex-col items-center justify-center gap-0.5 transition-colors ${
+            className={`flex-1 py-2.5 flex flex-col items-center justify-center gap-0.5 transition-all duration-200 relative ${
               mobilePanel === p.id
-                ? 'text-white border-b-2 border-[#00E676] bg-white/5'
-                : 'text-zinc-500'
+                ? 'text-[#00E676]'
+                : 'text-slate-400 dark:text-zinc-500'
             }`}
             data-testid={`mobile-panel-${p.id}`}>
-            <p.icon size={16} weight={mobilePanel === p.id ? 'fill' : 'regular'} />
-            <span className="text-[8px] font-bold uppercase tracking-widest">{p.label}</span>
+            {mobilePanel === p.id && (
+              <span className="absolute top-0 inset-x-4 h-0.5 bg-[#00E676] rounded-b-full" />
+            )}
+            <p.icon size={18} weight={mobilePanel === p.id ? 'fill' : 'regular'} />
+            <span className="text-[9px] font-bold uppercase tracking-wider whitespace-nowrap">{p.label}</span>
           </button>
         ))}
       </div>
@@ -536,13 +553,15 @@ const TradingDashboard = () => {
       <div className="flex-1 flex flex-col lg:grid lg:grid-cols-12 overflow-hidden min-h-0">
 
         {/* Left Sidebar */}
-        <aside className={`lg:col-span-3 xl:col-span-2 border-r border-white/10 flex flex-col overflow-y-auto ${mobilePanel !== 'left' ? 'hidden lg:flex' : 'flex'}`} data-testid="left-sidebar">
+        <aside className={`lg:col-span-3 xl:col-span-2 border-r border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0A0A] flex flex-col overflow-y-auto transition-colors duration-200 ${mobilePanel !== 'left' ? 'hidden lg:flex' : 'flex'}`} data-testid="left-sidebar">
           {/* Left Tabs — horizontally scrollable on mobile */}
-          <div className="flex border-b border-white/10 shrink-0 overflow-x-auto scrollbar-none">
+          <div className="flex border-b border-slate-200 dark:border-white/10 shrink-0 overflow-x-auto scrollbar-none bg-white dark:bg-[#0A0A0A]">
             {leftTabs.map(tab => (
               <button key={tab.id} onClick={() => setLeftTab(tab.id)}
                 className={`flex-shrink-0 flex-1 min-w-[56px] py-2.5 px-1 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors whitespace-nowrap ${
-                  leftTab === tab.id ? 'text-white border-b-2 border-[#00E676] bg-white/5' : 'text-zinc-500 active:text-zinc-300'
+                  leftTab === tab.id
+                    ? 'text-[#00E676] border-b-2 border-[#00E676] bg-[#00E676]/10 dark:bg-white/5'
+                    : 'text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-300'
                 }`}
                 data-testid={`left-tab-${tab.id}`}>
                 {tab.label}
@@ -629,13 +648,15 @@ const TradingDashboard = () => {
         </main>
 
         {/* Right Sidebar */}
-        <aside className={`lg:col-span-3 border-l border-white/10 flex flex-col overflow-hidden ${mobilePanel !== 'right' ? 'hidden lg:flex' : 'flex'}`} data-testid="right-sidebar">
+        <aside className={`lg:col-span-3 border-l border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0A0A] flex flex-col overflow-hidden transition-colors duration-200 ${mobilePanel !== 'right' ? 'hidden lg:flex' : 'flex'}`} data-testid="right-sidebar">
           {/* Tabs — horizontally scrollable on mobile */}
-          <div className="flex border-b border-white/10 shrink-0 overflow-x-auto scrollbar-none">
+          <div className="flex border-b border-slate-200 dark:border-white/10 shrink-0 overflow-x-auto scrollbar-none bg-white dark:bg-[#0A0A0A]">
             {rightTabs.map(tab => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                 className={`flex-shrink-0 flex-1 min-w-[64px] py-2.5 px-2 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors whitespace-nowrap ${
-                  activeTab === tab.id ? 'text-white border-b-2 border-[#00E676] bg-white/5' : 'text-zinc-500 active:text-zinc-300'
+                  activeTab === tab.id
+                    ? 'text-[#00E676] border-b-2 border-[#00E676] bg-[#00E676]/10 dark:bg-white/5'
+                    : 'text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-300'
                 }`}
                 data-testid={`tab-${tab.id}`}>
                 {tab.label}
@@ -678,7 +699,7 @@ const TradingDashboard = () => {
                 )}
                 {!selectedStock && (
                   <div className="p-6 text-center">
-                    <p className="text-zinc-500 text-sm">Select a stock or crypto to view strategies</p>
+                    <p className="text-slate-400 dark:text-zinc-500 text-sm">Select a stock or crypto to view strategies</p>
                   </div>
                 )}
               </div>

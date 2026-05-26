@@ -6,12 +6,14 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { Shield } from "@phosphor-icons/react";
+import { useTheme } from "../context/ThemeContext";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function RegulatoryWatchdogPanel() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { theme } = useTheme();
 
   const fetch = async () => {
     try {
@@ -43,18 +45,18 @@ export default function RegulatoryWatchdogPanel() {
     <div
       className="overflow-hidden"
       style={{
-        background: "rgba(0,0,0,0.55)",
-        border: `1px solid ${color}22`,
+        background: theme === 'dark' ? "rgba(0,0,0,0.55)" : "rgba(255,255,255,0.9)",
+        border: `1px solid ${color}33`,
         borderRadius: 2,
       }}
     >
       {/* ── Header ── */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-white/[0.07]">
-        <Shield size={12} className="text-neutral-400" />
-        <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-neutral-400">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-black/[0.07] dark:border-white/[0.07]">
+        <Shield size={12} className="text-slate-400 dark:text-neutral-400" />
+        <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-slate-500 dark:text-neutral-400">
           Regulatory Watchdog
         </span>
-        <span className="ml-auto text-[8px] font-mono text-neutral-600">GLOBAL + IN</span>
+        <span className="ml-auto text-[8px] font-mono text-slate-400 dark:text-neutral-600">GLOBAL + IN</span>
       </div>
 
       {/* ── Loading skeleton ── */}
@@ -93,7 +95,7 @@ export default function RegulatoryWatchdogPanel() {
                 stroke={color} strokeWidth="2.5" strokeLinecap="round"
               />
               <circle cx="100" cy="100" r="5"  fill={color} />
-              <circle cx="100" cy="100" r="2"  fill="#0A0A0A" />
+              <circle cx="100" cy="100" r="2"  fill={theme === 'dark' ? "#0A0A0A" : "#FFFFFF"} />
               <text x="10"  y="115" fill="rgba(255,51,51,0.55)"  fontSize="9" fontFamily="monospace">HOSTILE</text>
               <text x="148" y="115" fill="rgba(51,102,255,0.55)" fontSize="9" fontFamily="monospace">SUPPORT</text>
             </svg>
@@ -108,12 +110,12 @@ export default function RegulatoryWatchdogPanel() {
               Score&nbsp;
               <span style={{ color }}>{nxStr(data.score)}</span>
               &nbsp;·&nbsp;Multiplier&nbsp;
-              <span className="text-white">{data.aggressiveness_multiplier}×</span>
+              <span className="text-slate-700 dark:text-white">{data.aggressiveness_multiplier}×</span>
             </div>
           </div>
 
           {/* NSE/BSE row */}
-          <div className="flex items-center gap-2 mb-2.5 px-2 py-1 bg-white/[0.025] border border-white/[0.05]">
+          <div className="flex items-center gap-2 mb-2.5 px-2 py-1 bg-black/[0.025] dark:bg-white/[0.025] border border-black/[0.05] dark:border-white/[0.05]">
             <span className="text-[8px] font-mono text-neutral-600 uppercase tracking-wider">🇮🇳 NSE/BSE</span>
             <div className="flex-1 h-px bg-white/5" />
             <span className="text-[8px] font-mono font-bold" style={{ color }}>
@@ -133,7 +135,7 @@ export default function RegulatoryWatchdogPanel() {
                   <span className="text-[7px] font-bold uppercase tracking-widest text-neutral-500">
                     {h.src}
                   </span>
-                  <p className="text-[9px] font-mono text-neutral-300 leading-snug mt-0.5 line-clamp-1"
+                  <p className="text-[9px] font-mono text-slate-600 dark:text-neutral-300 leading-snug mt-0.5 line-clamp-1"
                      title={h.headline}>
                     {h.headline}
                   </p>

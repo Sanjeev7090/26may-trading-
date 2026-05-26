@@ -34,9 +34,9 @@ const IndicesTickerBar = ({ onIndexClick }) => {
 
   if (loading && indices.length === 0) {
     return (
-      <div className="border-b border-white/10 bg-[#0B0B0B] px-2 py-2 flex gap-2 overflow-x-auto scrollbar-none shrink-0">
+      <div className="border-b border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#0B0B0B] px-2 py-2 flex gap-2 overflow-x-auto scrollbar-none shrink-0">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="min-w-[140px] h-[44px] rounded-md bg-white/[0.04] animate-pulse" />
+          <div key={i} className="min-w-[140px] h-[44px] rounded-md bg-slate-200 dark:bg-white/[0.04] animate-pulse" />
         ))}
       </div>
     );
@@ -44,7 +44,7 @@ const IndicesTickerBar = ({ onIndexClick }) => {
 
   return (
     <div
-      className="border-b border-white/10 bg-[#0B0B0B] px-2 py-2 flex gap-2 overflow-x-auto scrollbar-none shrink-0"
+      className="border-b border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#0B0B0B] px-2 py-2 flex gap-2 overflow-x-auto scrollbar-none shrink-0 transition-colors duration-200"
       data-testid="indices-ticker-bar"
     >
       {indices.map((idx) => {
@@ -57,13 +57,13 @@ const IndicesTickerBar = ({ onIndexClick }) => {
             disabled={!supportsOptions}
             className={`min-w-[150px] flex-shrink-0 text-left rounded-md border px-3 py-2 transition-all ${
               supportsOptions
-                ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.08] hover:border-[#00E676]/40 active:scale-[0.98] cursor-pointer'
-                : 'border-white/5 bg-white/[0.02] opacity-70 cursor-not-allowed'
+                ? 'border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.03] hover:bg-slate-50 dark:hover:bg-white/[0.08] hover:border-[#00E676]/40 active:scale-[0.98] cursor-pointer'
+                : 'border-slate-100 dark:border-white/5 bg-slate-50 dark:bg-white/[0.02] opacity-70 cursor-not-allowed'
             }`}
             data-testid={`index-pill-${idx.key}`}
           >
             <div className="flex items-center justify-between mb-0.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-white/90 truncate">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-white/90 truncate">
                 {idx.name}
               </span>
               {supportsOptions && (
@@ -71,7 +71,7 @@ const IndicesTickerBar = ({ onIndexClick }) => {
               )}
             </div>
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-sm font-bold font-mono text-white tabular-nums">
+              <span className="text-sm font-bold font-mono text-slate-900 dark:text-white tabular-nums">
                 {idx.price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
               </span>
               <span

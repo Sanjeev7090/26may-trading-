@@ -49,7 +49,7 @@ const StockSearch = ({ onStockSelect, selectedStock }) => {
           value={query}
           onChange={handleInputChange}
           placeholder="Search stocks..."
-          className="w-full bg-black border border-white/10 focus:border-white/40 pl-8 pr-3 py-2 text-xs font-mono text-white placeholder:text-zinc-600 outline-none transition-colors"
+          className="w-full bg-slate-50 dark:bg-black border border-slate-200 dark:border-white/10 focus:border-slate-400 dark:focus:border-white/40 pl-8 pr-3 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 outline-none transition-colors"
           data-testid="stock-search-input"
         />
       </div>
@@ -70,13 +70,13 @@ const StockSearch = ({ onStockSelect, selectedStock }) => {
               <button
                 key={idx}
                 onClick={() => selectStock(stock)}
-                className="w-full text-left px-3 py-2 hover:bg-white/5 border-b border-white/5 transition-colors flex items-center gap-2"
+                className="w-full text-left px-3 py-2 hover:bg-slate-50 dark:hover:bg-white/5 border-b border-slate-100 dark:border-white/5 transition-colors flex items-center gap-2"
                 data-testid={`search-result-${idx}`}
               >
                 <span className={`text-[8px] font-bold px-1 py-0.5 border ${typeColor} font-mono shrink-0`}>
                   {typeBadge}
                 </span>
-                <span className="text-xs font-mono font-bold text-white shrink-0">{display}</span>
+                <span className="text-xs font-mono font-bold text-slate-900 dark:text-white shrink-0">{display}</span>
                 <span className="text-[10px] text-zinc-500 truncate ml-auto">{stock.name}</span>
               </button>
             );
